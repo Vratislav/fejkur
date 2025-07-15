@@ -49,6 +49,13 @@ class VoiceRecognizer:
         self.attempts = 0
         self.lockout_until = 0
         
+        # Security settings
+        self.security_config = self.config.get_security_config()
+        self.max_attempts = self.security_config.get('max_attempts', 10)
+        self.lockout_duration = self.security_config.get('lockout_duration', 0)
+        self.failed_attempts = 0
+        self.last_failed_time = 0
+        
         # Setup signal handlers
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
@@ -102,11 +109,13 @@ class VoiceRecognizer:
                 return False
             
             # Initialize MQTT (optional)
-            if not self.mqtt_client.initialize():
-                self.logger.warning("Failed to initialize MQTT client - continuing without MQTT")
-                self.mqtt_available = False
-            else:
+            try:
+                self.mqtt_client.initialize()
+                self.logger.info("MQTT client initialized")
                 self.mqtt_available = True
+            except Exception as e:
+                self.logger.warning(f"MQTT initialization failed (continuing without MQTT): {e}")
+                self.mqtt_available = False
             
             # Initialize button handler
             if not self.button_handler.initialize():
@@ -143,125 +152,167 @@ class VoiceRecognizer:
     
     def check_lockout(self):
         """Check if system is in lockout mode"""
-        if time.time() < self.lockout_until:
-            remaining = int(self.lockout_until - time.time())
-            self.logger.warning(f"System locked out for {remaining} more seconds")
-            return True
+        if self.lockout_duration > 0 and self.failed_attempts >= self.max_attempts:
+            time_since_last_failed = time.time() - self.last_failed_time
+            if time_since_last_failed < self.lockout_duration:
+                remaining_time = self.lockout_duration - time_since_last_failed
+                self.logger.warning(f"System locked out. Try again in {remaining_time:.0f} seconds")
+                return True
+            else:
+                # Reset lockout
+                self.failed_attempts = 0
+                self.logger.info("Lockout period expired")
+        
         return False
     
-    def reset_lockout(self):
-        """Reset lockout state"""
-        self.attempts = 0
-        self.lockout_until = 0
-        self.logger.info("Lockout reset")
+    def handle_successful_password(self):
+        """Handle successful password recognition"""
+        self.logger.info("Password accepted!")
+        
+        # Reset failed attempts
+        self.failed_attempts = 0
+        
+        # Play success sound
+        self.audio_manager.play_sound('success')
+        
+        # Send MQTT message
+        try:
+            if self.mqtt_available:
+                self.mqtt_client.send_unlock_message()
+                self.logger.info("MQTT unlock message sent")
+            else:
+                self.logger.info("MQTT not available - skipping unlock message")
+        except Exception as e:
+            self.logger.warning(f"Failed to send MQTT message: {e}")
     
-    def evaluate_password_continuous(self):
-        """Evaluate password using continuous recognition like learning mode"""
+    def handle_failed_password(self):
+        """Handle failed password recognition"""
+        self.logger.warning("Password rejected")
+        
+        # Increment failed attempts
+        self.failed_attempts += 1
+        self.last_failed_time = time.time()
+        
+        # Play failure sound
+        self.audio_manager.play_sound('fail')
+        
+        # Check for lockout
+        if self.failed_attempts >= self.max_attempts:
+            self.logger.warning(f"Maximum failed attempts reached ({self.max_attempts})")
+            if self.lockout_duration > 0:
+                self.logger.warning(f"System locked for {self.lockout_duration} seconds")
+    
+    def continuous_password_evaluation(self):
+        """Continuously evaluate password from voice input with smart timeout"""
         try:
             self.logger.info("Starting continuous password evaluation...")
             
-            # Reset recognizer state to clear any cached results
-            self.voice_processor.recognizer.Reset()
+            # Reset VOSK recognizer state
+            self.voice_processor.reset_recognizer()
             
-            # Play password prompt
+            # Play prompt sound and wait for it to finish
             self.audio_manager.play_sound('prompt')
-            time.sleep(0.5)  # Small delay after prompt
             
-            # Use continuous recognition
-            stop = [False]
-            import threading
+            # Wait a moment for prompt to finish playing
+            time.sleep(0.5)  # Brief pause to ensure prompt is done
             
-            def wait_for_input():
-                # Wait for user input or timeout
-                import select
-                import sys
-                if select.select([sys.stdin], [], [], 10.0)[0]:  # 10 second timeout
-                    input()  # Consume the input
-                stop[0] = True
-            
-            t = threading.Thread(target=wait_for_input)
-            t.daemon = True
-            t.start()
-            
-            # Collect results from continuous recognition
-            current_transcription = ""
-            final_transcription = ""
-            
-            # Open input stream for continuous recognition
+            # Open audio input stream with specific device if configured
             p = self.audio_manager.pyaudio
-            stream = p.open(
-                format=self.audio_manager.format,
-                channels=self.audio_manager.channels,
-                rate=self.audio_manager.sample_rate,
-                input=True,
-                frames_per_buffer=self.audio_manager.chunk_size
-            )
+            if self.audio_manager.input_device_index is not None:
+                stream = p.open(
+                    format=self.audio_manager.format,
+                    channels=self.audio_manager.channels,
+                    rate=self.audio_manager.sample_rate,
+                    input=True,
+                    input_device_index=self.audio_manager.input_device_index,
+                    frames_per_buffer=self.audio_manager.chunk_size
+                )
+            else:
+                stream = p.open(
+                    format=self.audio_manager.format,
+                    channels=self.audio_manager.channels,
+                    rate=self.audio_manager.sample_rate,
+                    input=True,
+                    frames_per_buffer=self.audio_manager.chunk_size
+                )
             
             try:
-                while not stop[0]:
+                # Start timeout AFTER prompt finishes
+                start_time = time.time()
+                timeout = 15  # 15 seconds timeout for complete sentence
+                last_speech_time = None  # Will be set when first speech is detected
+                silence_threshold = 2.0  # 2 seconds of silence indicates sentence end
+                speech_detected = False  # Track if any speech has been detected
+                sentence_complete = False  # Track if we have a complete sentence
+                
+                while time.time() - start_time < timeout:
+                    # Read audio data
                     data = stream.read(self.audio_manager.chunk_size, exception_on_overflow=False)
                     
-                    # Check for final result
-                    if self.voice_processor.recognizer.AcceptWaveform(data):
-                        result = self.voice_processor.recognizer.Result()
-                        if result:
-                            # Parse the result
-                            import json
-                            try:
-                                result_data = json.loads(result)
-                                if 'text' in result_data and result_data['text'].strip():
-                                    text = result_data['text'].strip()
-                                    if text != current_transcription:  # Only show if changed
-                                        current_transcription = text
-                                        final_transcription = text  # Keep the latest
-                                        self.logger.info(f"Final transcription: '{text}'")
-                                        
-                                        # Check password on final result
-                                        if self.password_manager.check_password(text):
-                                            self.logger.info(f"Password match found in final: '{text}'")
-                                            return text
-                            except json.JSONDecodeError:
-                                pass
+                    # Process audio chunk
+                    if self.voice_processor.process_audio_chunk(data):
+                        # Speech detected, update last speech time
+                        speech_detected = True
+                        last_speech_time = time.time()
+                        sentence_complete = False  # Reset sentence completion flag
+                        
+                        # Get final result
+                        final_result = self.voice_processor.get_final_result()
+                        if final_result:
+                            self.logger.info(f"Final: '{final_result}'")
+                            sentence_complete = True  # We have a complete sentence
+                            if self.password_manager.check_password(final_result):
+                                self.logger.info(f"Password match found in final: '{final_result}'")
+                                return "success"
+                            else:
+                                # Speech detected but wrong password
+                                self.logger.info("Speech detected but password incorrect")
+                                return "failed"
                     else:
-                        # Check partial result
-                        partial = self.voice_processor.recognizer.PartialResult()
-                        if partial:
-                            # Parse partial result
-                            import json
-                            try:
-                                partial_data = json.loads(partial)
-                                if 'partial' in partial_data and partial_data['partial'].strip():
-                                    partial_text = partial_data['partial'].strip()
-                                    
-                                    # Only log if it's different from last partial
-                                    if partial_text != getattr(self, '_last_partial', ''):
-                                        self._last_partial = partial_text
-                                        self.logger.debug(f"Partial transcription: '{partial_text}'")
-                                        
-                                        # Check password on partial result
-                                        if self.password_manager.check_password(partial_text):
-                                            self.logger.info(f"Password match found in partial: '{partial_text}'")
-                                            return partial_text
-                            except json.JSONDecodeError:
-                                pass
-            finally:
+                        # Get partial result
+                        partial_result = self.voice_processor.get_partial_result()
+                        if partial_result:
+                            # Speech detected in partial result
+                            speech_detected = True
+                            last_speech_time = time.time()
+                            self.logger.debug(f"Partial: '{partial_result}'")
+                            # Don't check password on partial results - wait for complete sentence
+                    
+                    # Check for sentence completion (silence after speech)
+                    if speech_detected and last_speech_time and (time.time() - last_speech_time > silence_threshold):
+                        if sentence_complete:
+                            # We have a complete sentence but no password match
+                            self.logger.info("Sentence completed but no password match")
+                            return "failed"
+                        else:
+                            # Still waiting for sentence completion
+                            self.logger.debug("Waiting for sentence completion...")
+                            # Continue listening for a bit longer
+                            if time.time() - last_speech_time > silence_threshold + 1.0:  # Extra 1 second
+                                self.logger.info("No complete sentence detected")
+                                stream.stop_stream()
+                                stream.close()
+                                self.audio_manager.play_sound('timeout')
+                                return "timeout"
+                
+                # Full timeout reached
+                self.logger.info("Full timeout reached")
+                # Close stream before playing timeout sound
                 stream.stop_stream()
                 stream.close()
-            
-            # Wait for thread to finish
-            t.join(timeout=1)
-            
-            if final_transcription and final_transcription.strip():
-                self.logger.info(f"Final transcription: '{final_transcription}'")
-                return final_transcription
-            else:
-                self.logger.warning("No speech detected")
-                return None
+                self.audio_manager.play_sound('timeout')
+                return "timeout"
                 
+            except Exception as e:
+                self.logger.error(f"Error during audio processing: {e}")
+                stream.stop_stream()
+                stream.close()
+                return False
+            
         except Exception as e:
-            self.logger.error(f"Error during continuous password evaluation: {e}")
-            return None
-
+            self.logger.error(f"Error during password evaluation: {e}")
+            return False
+    
     def handle_button_press(self):
         """Handle button press event"""
         if self.processing:
@@ -269,41 +320,29 @@ class VoiceRecognizer:
             return
         
         if self.check_lockout():
-            self.audio_manager.play_sound('error')
+            self.audio_manager.play_sound('fail')
             return
         
         self.logger.info("Button pressed, starting voice recognition")
         self.processing = True
         
         try:
-            # Use continuous recognition for password evaluation
-            recognized_text = self.evaluate_password_continuous()
+            # Use improved continuous recognition for password evaluation
+            result = self.continuous_password_evaluation()
             
-            if not recognized_text:
-                self.logger.warning("No speech detected")
-                self.audio_manager.play_sound('failure')
-                self.attempts += 1
-                return
-            
-            # Password was already checked in evaluate_password_continuous
-            # If we get here, a password was matched
-            self.logger.info(f"Password accepted: '{recognized_text}'")
-            self.audio_manager.play_sound('success')
-            
-            # Send MQTT unlock message (if available)
-            if hasattr(self, 'mqtt_available') and self.mqtt_available:
-                if self.mqtt_client.send_unlock_message():
-                    self.logger.info("MQTT unlock message sent successfully")
-                else:
-                    self.logger.warning("Failed to send MQTT unlock message")
+            if result == "success":
+                self.handle_successful_password()
+            elif result == "failed":
+                self.handle_failed_password()
+            elif result == "timeout":
+                # Timeout - do nothing, already handled by continuous_password_evaluation
+                pass
             else:
-                self.logger.info("MQTT not available - skipping unlock message")
-            
-            self.reset_lockout()
+                self.logger.warning("Unexpected result from password evaluation")
         
         except Exception as e:
             self.logger.error(f"Error during voice recognition: {e}")
-            self.audio_manager.play_sound('error')
+            self.audio_manager.play_sound('fail')
         
         finally:
             self.processing = False

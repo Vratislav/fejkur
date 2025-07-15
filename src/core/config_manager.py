@@ -22,9 +22,10 @@ class ConfigManager:
     def load_config(self):
         """Load configuration from YAML file"""
         try:
-            # Get the directory of the current script
+            # Get the project root directory (2 levels up from src/core/)
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(script_dir, self.config_file)
+            project_root = os.path.join(script_dir, '..', '..')
+            config_path = os.path.join(project_root, 'config', self.config_file)
             
             if not os.path.exists(config_path):
                 self.logger.error(f"Configuration file not found: {config_path}")
@@ -132,6 +133,11 @@ class ConfigManager:
         """Get the directory where the script is located"""
         return os.path.dirname(os.path.abspath(__file__))
     
+    def get_project_root(self):
+        """Get the project root directory"""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(script_dir, '..', '..')
+    
     def get_audio_file_path(self, audio_type):
         """Get full path to audio file"""
         audio_files = self.get_audio_files_config()
@@ -145,9 +151,9 @@ class ConfigManager:
         if os.path.isabs(audio_file):
             return audio_file
         
-        # Otherwise, make it relative to the script directory
-        script_dir = self.get_script_directory()
-        return os.path.join(script_dir, audio_file)
+        # Otherwise, make it relative to the project root
+        project_root = self.get_project_root()
+        return os.path.join(project_root, audio_file)
     
     def get_password_file_path(self):
         """Get full path to password file"""
@@ -157,6 +163,6 @@ class ConfigManager:
         if os.path.isabs(password_file):
             return password_file
         
-        # Otherwise, make it relative to the script directory
-        script_dir = self.get_script_directory()
-        return os.path.join(script_dir, password_file) 
+        # Otherwise, make it relative to the project root
+        project_root = self.get_project_root()
+        return os.path.join(project_root, 'config', password_file) 

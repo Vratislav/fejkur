@@ -11,15 +11,16 @@ import signal
 import logging
 from datetime import datetime
 
-# Add current directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add src directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from config_manager import ConfigManager
-from audio_manager import AudioManager
-from voice_processor import VoiceProcessor
-from password_manager import PasswordManager
-from mqtt_client import MQTTClient
+from core.config_manager import ConfigManager
+from core.audio_manager import AudioManager
+from core.voice_processor import VoiceProcessor
+from core.password_manager import PasswordManager
+from core.mqtt_client import MQTTClient
 
+# Platform-specific imports will be handled in the platform classes
 
 class VoiceRecognizerBase:
     """Base voice recognition system with shared functionality"""

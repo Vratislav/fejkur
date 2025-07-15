@@ -41,7 +41,7 @@ mqtt:
 # Voice Recognition Settings
 voice:
   language: "en"  # English
-  model_path: "./vosk-model-en"  # Path to English VOSK model
+  model_path: "./models/vosk-model-en"  # Path to English VOSK model
   confidence_threshold: 0.3
   max_alternatives: 3
 
@@ -60,10 +60,10 @@ logging:
 
 # Audio Files
 audio_files:
-  prompt: "audio/password_prompt.wav"
-  success: "audio/success.wav"
-  failure: "audio/failure.wav"
-  error: "audio/error.wav"
+  prompt: "sounds/prompt-0.mp3"
+  success: "sounds/success-0.mp3"
+  failure: "sounds/fail-0.mp3"
+  error: "sounds/fail-0.mp3"
 
 # Debug Settings
 debug:

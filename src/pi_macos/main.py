@@ -12,12 +12,12 @@ import logging
 import threading
 from pathlib import Path
 
-# Add current directory to path for imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Add src directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from voice_recognizer_base import VoiceRecognizerBase
-from bluetooth_manager import BluetoothManager
-from button_handler import ButtonHandler
+from core.voice_recognizer_base import VoiceRecognizerBase
+from pi_macos.bluetooth_manager import BluetoothManager
+from pi_macos.button_handler import ButtonHandler
 
 
 class RaspberryPiVoiceRecognizer(VoiceRecognizerBase):

@@ -1,0 +1,70 @@
+# Voice Recognition Door Opener Configuration
+
+# Audio Settings
+audio:
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 1024
+  format: "int16"
+  recording_duration: 5  # seconds
+  silence_threshold: 0.01
+  input_device: "USBAudio1.0"  # USB microphone for input
+  output_device: "UGREEN-60300"  # Bluetooth speaker for output
+  input_device_index: 2  # Device index for USB microphone
+  output_device_index: 1  # Device index for Bluetooth speaker
+
+# Bluetooth Settings
+bluetooth:
+  auto_connect: true
+  device_name: "UGREEN-60300"  # Leave empty to connect to first available
+  reconnect_attempts: 3
+  scan_timeout: 10
+
+# GPIO Settings
+gpio:
+  button_pin: 17  # GPIO17
+  led_pin: 18     # GPIO18 (optional status LED)
+  button_pull_up: true
+  button_bounce_time: 0.3
+
+# MQTT Settings
+mqtt:
+  broker: "192.168.1.64"
+  port: 1883
+  username: "homey"
+  password: "homey"
+  topic: "home/door/unlock"
+  client_id: "voice-recognizer"
+  keepalive: 60
+  qos: 1
+
+# Voice Recognition Settings
+voice:
+  language: "en"  # English
+  model_path: "./vosk-model-en"  # Path to English VOSK model
+  confidence_threshold: 0.3
+  max_alternatives: 3
+
+# Security Settings
+security:
+  password_file: "passwords.txt"
+  max_attempts: 10
+  lockout_duration: 0  # seconds
+
+# Logging
+logging:
+  level: "INFO"
+  file: "/var/log/voice-recognizer.log"
+  max_size: 10485760  # 10MB
+  backup_count: 5
+
+# Audio Files
+audio_files:
+  prompt: "audio/password_prompt.wav"
+  success: "audio/success.wav"
+  failure: "audio/failure.wav"
+  error: "audio/error.wav"
+
+# Debug Settings
+debug:
+  force_10pm_mode: true  # Force 10pm sound selection for testing 

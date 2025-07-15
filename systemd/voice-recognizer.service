@@ -1,0 +1,33 @@
+[Unit]
+Description=Voice Recognition Door Opener
+After=network.target bluetooth.service
+Wants=network.target bluetooth.service
+
+[Service]
+Type=simple
+User=sluchatko
+Group=sluchatko
+WorkingDirectory=/home/sluchatko/voice-recognizer
+ExecStart=/usr/bin/python3 /home/sluchatko/voice-recognizer/main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment=PYTHONPATH=/home/sluchatko/voice-recognizer
+Environment=DISPLAY=:0
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/sluchatko/voice-recognizer /var/log
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target 

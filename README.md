@@ -1,12 +1,26 @@
-# Voice Recognition Door Opener for Raspberry Pi
+# Voice Recognition Door Opener for Raspberry Pi & macOS
 
 ## Project Overview
 
-This project creates an automated voice recognition system for door access control using a Raspberry Pi 4. The system automatically connects to a Bluetooth handsfree device, listens for a button press, prompts for a password via audio, processes voice input using the Czech VOSK engine, and publishes MQTT messages to control smart home door locks.
+This project creates an automated voice recognition system for door access control using a Raspberry Pi 4 or macOS. The system connects to a Bluetooth handsfree device (on Pi), listens for a button press (on Pi) or Enter key (on macOS), prompts for a password via audio, processes voice input using the VOSK engine, and publishes MQTT messages to control smart home door locks.
+
+---
+
+## Architecture
+
+- **Shared core logic**: All business logic, audio, password, and MQTT code is in `voice_recognizer_base.py`.
+- **Platform-specific entry points**:
+  - `main.py` (Raspberry Pi): Handles GPIO, Bluetooth, and button events.
+  - `run_macos.py` (macOS): Handles interactive mode for development/testing.
+- **Add new features and bugfixes in the base class** for both platforms.
+- **macOS and Raspberry Pi behave identically** except for hardware integration.
+- See also: [`README-macos.md`](./README-macos.md)
+
+---
 
 ## System Requirements
 
-### Hardware
+### Hardware (Raspberry Pi)
 - **Raspberry Pi 4** (2GB RAM minimum, 4GB recommended)
 - **Bluetooth handsfree device** (headset, speakerphone, etc.)
 - **Push button** (GPIO connected)
@@ -16,80 +30,80 @@ This project creates an automated voice recognition system for door access contr
 
 ### Software
 - **Raspberry Pi OS** (64-bit recommended for better performance)
+- **macOS 10.15+** (for development/testing)
 - **Python 3.8+**
-- **VOSK** (Czech language model)
+- **VOSK** (Czech or English language model)
 - **PyAudio** (audio processing)
-- **PyBluez** (Bluetooth connectivity)
 - **Paho MQTT** (MQTT client)
-- **GPIO Zero** (button handling)
+- **RPi.GPIO** (button handling, Pi only)
+
+---
 
 ## System Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Push Button   │───▶│  Raspberry Pi   │───▶│   MQTT Broker   │
-│   (GPIO Input)  │    │   (Python App)  │    │  (Smart Home)   │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                │
-                                ▼
-                       ┌─────────────────┐
-                       │ Bluetooth Audio │
-                       │   (Handsfree)   │
-                       └─────────────────┘
++-------------------+    +-------------------+    +-------------------+
+|   Push Button     |--->|  Raspberry Pi     |--->|   MQTT Broker     |
+|   (GPIO Input)    |    |  (Python App)     |    |  (Smart Home)     |
++-------------------+    +-------------------+    +-------------------+
+                            |
+                            v
+                   +-------------------+
+                   | Bluetooth Audio   |
+                   |   (Handsfree)     |
+                   +-------------------+
+
+Or on macOS:
+
++-------------------+
+|   macOS App       |
+| (Python, Enter)   |
++-------------------+
+        |
+        v
++-------------------+
+|  System Microphone|
++-------------------+
 ```
 
-## Workflow
-
-1. **Startup**: System boots and automatically connects to paired Bluetooth handsfree
-2. **Standby**: System waits for button press while monitoring audio
-3. **Activation**: Button press triggers password prompt audio
-4. **Listening**: System records audio from microphone
-5. **Processing**: VOSK engine processes Czech speech to text
-6. **Validation**: Compares recognized text against password list
-7. **Action**: If password matches, publishes MQTT message to unlock door
-8. **Feedback**: Provides audio confirmation of success/failure
+---
 
 ## File Structure
 
 ```
 voice-recognizer/
 ├── README.md
+├── README-macos.md
 ├── requirements.txt
+├── requirements-macos.txt
 ├── config.yaml
-├── main.py
+├── voice_recognizer_base.py   # Shared core logic (all platforms)
+├── main.py                    # Raspberry Pi entry point (GPIO, Bluetooth)
+├── run_macos.py               # macOS entry point (interactive mode)
 ├── bluetooth_manager.py
 ├── audio_manager.py
 ├── voice_processor.py
 ├── mqtt_client.py
 ├── button_handler.py
 ├── passwords.txt
-├── audio/
-│   ├── password_prompt.wav
-│   ├── success.wav
-│   └── failure.wav
-└── systemd/
-    └── voice-recognizer.service
+├── sounds/
+├── vosk-model-cs/ (or vosk-model-en/)
+├── systemd/
+└── ...
 ```
 
-## Configuration
+---
 
-### Audio Settings
-- Sample rate: 16000 Hz
-- Channels: 1 (mono)
-- Format: 16-bit PCM
-- Recording duration: 5 seconds (configurable)
+## Development Workflow
 
-### MQTT Settings
-- Broker: Local or cloud MQTT broker
-- Topic: `home/door/unlock`
-- Message: `{"action": "unlock", "timestamp": "..."}`
+- **Add new features and bugfixes in `voice_recognizer_base.py`**
+- Platform-specific code (GPIO, Bluetooth, button) is only in `main.py` (Pi) or `run_macos.py` (macOS)
+- Test on macOS with `python run_macos.py` (no GPIO/Bluetooth)
+- Deploy to Raspberry Pi with `python main.py` (full hardware support)
 
-### Security
-- Password list stored locally
-- Audio recordings not stored (privacy)
-- MQTT authentication required
+---
 
-## Installation
+## Installation & Usage (Raspberry Pi)
 
 1. Flash Raspberry Pi OS 64-bit to SD card
 2. Enable SSH and configure network
@@ -98,10 +112,6 @@ voice-recognizer/
 5. Configure Bluetooth pairing
 6. Set up MQTT broker connection
 7. Configure systemd service for auto-start
-
-## Usage
-
-The system runs automatically at startup. Manual operation:
 
 ```bash
 # Start the service
@@ -114,24 +124,16 @@ sudo systemctl status voice-recognizer
 sudo journalctl -u voice-recognizer -f
 ```
 
-## Troubleshooting
+---
 
-- **Bluetooth issues**: Check pairing status, restart bluetooth service
-- **Audio problems**: Verify audio device selection, check volume levels
-- **VOSK errors**: Ensure Czech model is downloaded and accessible
-- **MQTT failures**: Verify broker connectivity and credentials
-
-## Security Considerations
+## Security & Troubleshooting
 
 - Use strong passwords in the password list
 - Secure MQTT broker with authentication
-- Consider encrypting password file
 - Regular security updates for Raspberry Pi OS
-- Physical security of the device
+- See `README-macos.md` for macOS-specific notes
 
-## Performance Optimization
+---
 
-- Use 64-bit OS for better memory management
-- Optimize audio buffer sizes
-- Minimize background processes
-- Use SSD storage for better I/O performance 
+## See Also
+- [`README-macos.md`](./README-macos.md) for macOS development/testing 

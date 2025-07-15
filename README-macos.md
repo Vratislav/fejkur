@@ -2,9 +2,23 @@
 
 This is the macOS development version of the voice recognition door opener. It allows you to test and develop the voice recognition system on macOS without needing a Raspberry Pi.
 
+---
+
+## Architecture
+
+- **Shared core logic**: All business logic, audio, password, and MQTT code is in `voice_recognizer_base.py`.
+- **Platform-specific entry points**:
+  - `run_macos.py` (macOS): Handles interactive mode for development/testing.
+  - `main.py` (Raspberry Pi): Handles GPIO, Bluetooth, and button events.
+- **Add new features and bugfixes in the base class** for both platforms.
+- **macOS and Raspberry Pi behave identically** except for hardware integration.
+- See also: [`README.md`](./README.md)
+
+---
+
 ## Features
 
-- ✅ **Voice Recognition**: Uses VOSK for Czech speech recognition
+- ✅ **Voice Recognition**: Uses VOSK for Czech or English speech recognition
 - ✅ **Sound Effects**: Time-based sound selection with cycling
 - ✅ **Password Management**: Configurable password matching
 - ✅ **MQTT Integration**: Optional MQTT messaging
@@ -137,6 +151,14 @@ audio:
 
 ## Development
 
+### Code Structure
+
+- **All core logic is in `voice_recognizer_base.py`** (shared by both platforms)
+- **macOS entry point**: `run_macos.py` (just a thin wrapper)
+- **Raspberry Pi entry point**: `main.py` (handles GPIO, Bluetooth, button)
+- **Add new features and bugfixes in the base class** for both platforms
+- See [`README.md`](./README.md) for Pi-specific and deployment notes
+
 ### Testing Components
 
 - **Sound system**: `python test_sounds.py`
@@ -150,11 +172,12 @@ The macOS version is designed for development. You can:
 - Develop password matching algorithms
 - Test sound system features
 - Develop MQTT integration
+- All improvements should be made in `voice_recognizer_base.py` for both platforms
 
 ### Porting to Raspberry Pi
 
 When ready to deploy on Raspberry Pi:
-1. Use the original `main.py` (includes GPIO and Bluetooth)
+1. Use the same codebase (shared base class)
 2. Run `./install.sh` on the Pi
 3. Configure systemd service
 
@@ -162,9 +185,12 @@ When ready to deploy on Raspberry Pi:
 
 ```
 voice-recognizer/
-├── run_macos.py              # macOS main app
+├── run_macos.py              # macOS main app (thin wrapper)
+├── main.py                   # Raspberry Pi main app (GPIO, Bluetooth)
+├── voice_recognizer_base.py  # Shared core logic (all platforms)
 ├── setup_macos.sh            # macOS setup script
-├── requirements-macos.txt     # macOS dependencies
+├── requirements-macos.txt    # macOS dependencies
+├── requirements.txt          # Pi dependencies
 ├── test_sounds.py            # Sound system test
 ├── sounds/                   # Sound effects
 │   ├── prompt-0.mp3
@@ -173,7 +199,8 @@ voice-recognizer/
 │   └── fail-0.mp3
 ├── vosk-model-cs/            # VOSK model
 ├── passwords.txt             # Password list
-└── config.yaml              # Configuration
+├── config.yaml               # Configuration
+└── ...
 ```
 
 ## Logs
@@ -188,4 +215,9 @@ The app creates logs in:
 - No GPIO access (no physical button)
 - No Bluetooth audio (uses system microphone)
 - MQTT is optional and can be disabled
-- Passwords are stored in plain text for testing 
+- Passwords are stored in plain text for testing
+
+---
+
+## See Also
+- [`README.md`](./README.md) for Raspberry Pi and deployment details 

@@ -73,7 +73,29 @@ class ConfigManager:
     
     def get_voice_config(self):
         """Get voice recognition configuration"""
-        return self.get('voice', {})
+        voice_config = self.get('voice', {})
+        
+        # Handle language-based model path selection
+        language = voice_config.get('language', 'en')
+        model_path = voice_config.get('model_path', '')
+        
+        # If model_path is not set or doesn't exist, try language-specific path
+        if not model_path or not os.path.exists(model_path):
+            project_root = self.get_project_root()
+            if language == 'cs':
+                language_model_path = os.path.join(project_root, 'models', 'vosk-model-cs')
+            elif language == 'en':
+                language_model_path = os.path.join(project_root, 'models', 'vosk-model-en')
+            else:
+                language_model_path = os.path.join(project_root, 'models', f'vosk-model-{language}')
+            
+            if os.path.exists(language_model_path):
+                voice_config['model_path'] = language_model_path
+                self.logger.info(f"Using {language} model at: {language_model_path}")
+            else:
+                self.logger.warning(f"Model not found for language '{language}' at: {language_model_path}")
+        
+        return voice_config
     
     def get_security_config(self):
         """Get security configuration"""

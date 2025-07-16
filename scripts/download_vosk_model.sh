@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Manual VOSK Czech Model Download Script
-# This script tries multiple URLs to download the Czech VOSK model
+# Manual VOSK Model Download Script
+# Downloads Czech and English VOSK models
 
 set -e
 
@@ -25,90 +25,116 @@ error() {
 }
 
 # Configuration
-MODEL_DIR="./vosk-model-cs"
+CZECH_MODEL_DIR="./models/vosk-model-cs"
+ENGLISH_MODEL_DIR="./models/vosk-model-en"
 DOWNLOAD_DIR="./downloads"
 
-# Available Czech model URLs (from https://alphacephei.com/vosk/models/)
-MODEL_URLS=(
+# Current model URLs
+CZECH_MODEL_URL="https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4-rhasspy.zip"
+ENGLISH_MODEL_URL="https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+
+# Alternative URLs if the main ones fail
+CZECH_ALTERNATIVE_URLS=(
+    "https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4-rhasspy.zip"
     "https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4-sphere.tar.gz"
     "https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4.tar.gz"
     "https://alphacephei.com/vosk/models/vosk-model-cs-0.4.tar.gz"
-    "https://alphacephei.com/vosk/models/vosk-model-cs-0.3.tar.gz"
 )
+
+ENGLISH_ALTERNATIVE_URLS=(
+    "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+    "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.tar.gz"
+    "https://alphacephei.com/vosk/models/vosk-model-en-us-0.15.tar.gz"
+)
+
+download_model() {
+    local model_type=$1
+    local model_dir=$2
+    local model_url=$3
+    local alternative_urls=("${@:4}")
+    
+    log "Downloading VOSK ${model_type} model..."
+    
+    if [ ! -d "$model_dir" ]; then
+        mkdir -p "$model_dir"
+        cd "$model_dir"
+        
+        log "Downloading ${model_type} model (this may take a while)..."
+        
+        # Try different URLs
+        download_success=false
+        for url in "$model_url" "${alternative_urls[@]}"; do
+            log "Trying URL: $url"
+            if wget -O model.zip "$url" 2>/dev/null; then
+                log "Successfully downloaded from: $url"
+                download_success=true
+                break
+            else
+                log "Failed to download from: $url"
+            fi
+        done
+        
+        if [ "$download_success" = false ]; then
+            warn "Failed to download ${model_type} model from all URLs"
+            log "Please download manually from: https://alphacephei.com/vosk/models/"
+            log "Or use a different ${model_type} model"
+            return 1
+        fi
+        
+        log "Extracting ${model_type} model..."
+        
+        # Handle both .zip and .tar.gz files
+        if [[ "$model_url" == *.zip ]]; then
+            unzip -q model.zip
+            # Find the extracted directory
+            extracted_dir=$(find . -maxdepth 1 -type d -name "vosk-model*" | head -1)
+            if [ -n "$extracted_dir" ]; then
+                mv "$extracted_dir"/* .
+                rmdir "$extracted_dir"
+            fi
+        else
+            tar -xzf model.zip
+            # Find the extracted directory
+            extracted_dir=$(find . -maxdepth 1 -type d -name "vosk-model*" | head -1)
+            if [ -n "$extracted_dir" ]; then
+                mv "$extracted_dir"/* .
+                rmdir "$extracted_dir"
+            fi
+        fi
+        
+        rm model.zip
+        
+        cd ../..
+        log "VOSK ${model_type} model downloaded and extracted"
+    else
+        log "VOSK ${model_type} model already exists"
+    fi
+}
 
 # Create download directory
 mkdir -p "$DOWNLOAD_DIR"
 cd "$DOWNLOAD_DIR"
 
-log "Starting VOSK Czech model download..."
+log "Starting VOSK model downloads..."
 
-# Try each URL
-download_success=false
-for url in "${MODEL_URLS[@]}"; do
-    log "Trying URL: $url"
-    
-    # Extract filename from URL
-    filename=$(basename "$url")
-    
-    # Try to download
-    if wget --timeout=30 --tries=3 -O "$filename" "$url" 2>/dev/null; then
-        log "Successfully downloaded: $filename"
-        download_success=true
-        break
-    else
-        warn "Failed to download from: $url"
-    fi
-done
+# Download Czech model
+download_model "Czech" "$CZECH_MODEL_DIR" "$CZECH_MODEL_URL" "${CZECH_ALTERNATIVE_URLS[@]}"
 
-if [ "$download_success" = false ]; then
-    error "Failed to download VOSK model from all URLs"
-    echo ""
-    echo "Manual download options:"
-    echo "1. Visit: https://alphacephei.com/vosk/models/"
-    echo "2. Look for Czech models (cs)"
-    echo "3. Download and extract to: $MODEL_DIR"
-    echo ""
-    echo "Alternative models you can try:"
-    echo "- vosk-model-small-cs-0.4-sphere.tar.gz"
-    echo "- vosk-model-small-cs-0.4.tar.gz"
-    echo "- vosk-model-cs-0.4.tar.gz"
-    echo "- vosk-model-cs-0.3.tar.gz"
-    exit 1
-fi
+# Download English model
+download_model "English" "$ENGLISH_MODEL_DIR" "$ENGLISH_MODEL_URL" "${ENGLISH_ALTERNATIVE_URLS[@]}"
 
-# Extract the model
-log "Extracting model..."
-tar -xzf "$filename"
-
-# Find the extracted directory
-extracted_dir=$(find . -maxdepth 1 -type d -name "vosk-model*" | head -1)
-
-if [ -z "$extracted_dir" ]; then
-    error "Could not find extracted model directory"
-    exit 1
-fi
-
-# Move to final location
-log "Moving model to: $MODEL_DIR"
-mkdir -p "$MODEL_DIR"
-mv "$extracted_dir"/* "$MODEL_DIR/"
-rmdir "$extracted_dir"
-
-# Clean up
-rm -f "$filename"
-
-log "VOSK Czech model downloaded and extracted successfully!"
-log "Model location: $MODEL_DIR"
+log "All VOSK models downloaded and extracted successfully!"
 
 # Update config.yaml if it exists
-if [ -f "../config.yaml" ]; then
-    log "Updating config.yaml with model path..."
-    sed -i "s|model_path:.*|model_path: \"$(pwd)/$MODEL_DIR\"|g" ../config.yaml
+if [ -f "../config/config.yaml" ]; then
+    log "Updating config/config.yaml with model paths..."
+    sed -i "s|model_path:.*|model_path: \"$(pwd)/$CZECH_MODEL_DIR\"|g" ../config/config.yaml
     log "Config updated!"
 fi
 
 echo ""
 echo "Next steps:"
-echo "1. Update config.yaml if needed"
-echo "2. Run the installation script"
-echo "3. Test the voice recognition system" 
+echo "1. Update config/config.yaml if needed"
+echo "2. Set 'language' to 'cs' for Czech or 'en' for English in config"
+echo "3. Run the installation script"
+echo "4. Test the voice recognition system" 

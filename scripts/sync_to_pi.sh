@@ -53,8 +53,9 @@ rsync -avz \
     --exclude='*.pyc' \
     --exclude='.git' \
     --exclude='*.log' \
-    --exclude='vosk-model-cs' \
-    --exclude='audio/*.wav' \
+    --exclude='models/vosk-model-cs' \
+    --exclude='sounds/*.mp3' \
+    --exclude='sounds/*.wav' \
     --delete \
     "$LOCAL_PATH/" "$PI_USER@$PI_HOST:$PI_PATH/"
 

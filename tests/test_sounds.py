@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Test script for enhanced sound system
-Tests time-based sound selection and cycling
+Test script for audio playback system
 """
 
 import sys
 import os
-import logging
 import time
+import logging
+from pathlib import Path
 from datetime import datetime
-q
-# Add current directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config_manager import ConfigManager
-from audio_manager import AudioManager
+# Add src directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from core.config_manager import ConfigManager
+from core.audio_manager import AudioManager
 
 
 def setup_logging():

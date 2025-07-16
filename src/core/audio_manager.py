@@ -49,6 +49,44 @@ class AudioManager:
         # Audio file cache
         self.audio_cache = {}
     
+    def _find_device_by_name(self, device_name: str, is_input: bool = True) -> Optional[int]:
+        """Find device index by name"""
+        try:
+            for i in range(self.pyaudio.get_device_count()):
+                device_info = self.pyaudio.get_device_info_by_index(i)
+                if device_name.lower() in device_info['name'].lower():
+                    # Check if device supports the required functionality
+                    if is_input and device_info['maxInputChannels'] > 0:
+                        return i
+                    elif not is_input and device_info['maxOutputChannels'] > 0:
+                        return i
+            return None
+        except Exception as e:
+            self.logger.error(f"Error finding device by name: {e}")
+            return None
+    
+    def _resolve_device_indices(self):
+        """Resolve device names to indices if needed"""
+        try:
+            # Resolve input device name to index
+            if self.input_device_name and self.input_device_index is None:
+                self.input_device_index = self._find_device_by_name(self.input_device_name, is_input=True)
+                if self.input_device_index is not None:
+                    self.logger.info(f"Found input device '{self.input_device_name}' at index {self.input_device_index}")
+                else:
+                    self.logger.warning(f"Input device '{self.input_device_name}' not found, using default")
+            
+            # Resolve output device name to index
+            if self.output_device_name and self.output_device_index is None:
+                self.output_device_index = self._find_device_by_name(self.output_device_name, is_input=False)
+                if self.output_device_index is not None:
+                    self.logger.info(f"Found output device '{self.output_device_name}' at index {self.output_device_index}")
+                else:
+                    self.logger.warning(f"Output device '{self.output_device_name}' not found, using default")
+                    
+        except Exception as e:
+            self.logger.error(f"Error resolving device indices: {e}")
+    
     def initialize(self):
         """Initialize audio system"""
         try:
@@ -56,6 +94,9 @@ class AudioManager:
             
             # Initialize PyAudio
             self.pyaudio = pyaudio.PyAudio()
+            
+            # Resolve device names to indices
+            self._resolve_device_indices()
             
             # Test audio device
             if not self._test_audio_device():
@@ -167,8 +208,8 @@ class AudioManager:
             self.logger.warning(f"Unknown sound type: {sound_type}")
             return []
         # Prepend sounds directory and check existence
-        script_dir = self.config.get_script_directory()
-        sounds_dir = os.path.join(script_dir, "sounds")
+        project_root = self.config.get_project_root()
+        sounds_dir = os.path.join(project_root, "sounds")
         full_paths = [os.path.join(sounds_dir, f) for f in files if os.path.exists(os.path.join(sounds_dir, f))]
         if not full_paths:
             self.logger.warning(f"No sound files found for type: {sound_type} (after 10pm: {after_10pm})")
@@ -360,6 +401,7 @@ class AudioManager:
                 channels=self.channels,
                 rate=self.sample_rate,
                 input=True,
+                input_device_index=self.input_device_index,
                 frames_per_buffer=self.chunk_size
             )
             
@@ -421,6 +463,7 @@ class AudioManager:
                 channels=self.channels,
                 rate=self.sample_rate,
                 input=True,
+                input_device_index=self.input_device_index,
                 frames_per_buffer=self.chunk_size
             )
             

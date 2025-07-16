@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple VOSK Test Script
-Tests speech recognition and outputs raw VOSK results
+Test script for VOSK speech recognition
 """
 
 import sys
@@ -10,12 +9,12 @@ import logging
 import numpy as np
 from pathlib import Path
 
-# Add current directory to path
-sys.path.append(str(Path(__file__).parent))
+# Add src directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from config_manager import ConfigManager
-from audio_manager import AudioManager
-from voice_processor import VoiceProcessor
+from core.config_manager import ConfigManager
+from core.voice_processor import VoiceProcessor
+from core.audio_manager import AudioManager
 
 
 def setup_logging():

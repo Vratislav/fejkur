@@ -315,6 +315,7 @@ class VoiceProcessor:
             channels=audio_manager.channels,
             rate=audio_manager.sample_rate,
             input=True,
+            input_device_index=audio_manager.input_device_index,
             frames_per_buffer=audio_manager.chunk_size
         )
         

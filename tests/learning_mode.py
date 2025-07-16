@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 """
-Learning Mode for Voice Recognition
-Records password repetitions and shows all VOSK recognition variations
+Learning mode for voice recognition passwords
+Captures multiple repetitions and shows all VOSK variations
 """
 
 import sys
+import json
 import time
 import logging
-import json
-import numpy as np
 from pathlib import Path
-from collections import Counter
+from datetime import datetime
 
-# Add current directory to path
-sys.path.append(str(Path(__file__).parent))
+# Add src directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from config_manager import ConfigManager
-from bluetooth_manager import BluetoothManager
-from audio_manager import AudioManager
-from voice_processor import VoiceProcessor
+from core.config_manager import ConfigManager
+from core.voice_processor import VoiceProcessor
+from core.audio_manager import AudioManager
+from core.password_manager import PasswordManager
 
 
 def setup_logging():

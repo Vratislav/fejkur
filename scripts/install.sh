@@ -14,6 +14,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_DIR="/home/sluchatko/voice-recognizer"
 SERVICE_NAME="voice-recognizer"
 
@@ -140,84 +141,130 @@ install_python_deps() {
     log "Python dependencies installed"
 }
 
-# Download VOSK model
-download_vosk_model() {
-    log "Downloading VOSK Czech model..."
+# Download VOSK models
+download_vosk_models() {
+    log "Downloading VOSK models..."
     
-    MODEL_DIR="$INSTALL_DIR/vosk-model-cs"
-    MODEL_URL="https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4-sphere.tar.gz"
+    CZECH_MODEL_DIR="$INSTALL_DIR/models/vosk-model-cs"
+    ENGLISH_MODEL_DIR="$INSTALL_DIR/models/vosk-model-en"
     
-    # Try alternative URLs if the main one fails
-    ALTERNATIVE_URLS=(
+    # Current model URLs
+    CZECH_MODEL_URL="https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4-rhasspy.zip"
+    ENGLISH_MODEL_URL="https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+    
+    # Alternative URLs if the main ones fail
+    CZECH_ALTERNATIVE_URLS=(
+        "https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4-rhasspy.zip"
         "https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4-sphere.tar.gz"
         "https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4.tar.gz"
         "https://alphacephei.com/vosk/models/vosk-model-cs-0.4.tar.gz"
     )
     
-    if [ ! -d "$MODEL_DIR" ]; then
-        mkdir -p "$MODEL_DIR"
-        cd "$MODEL_DIR"
+    ENGLISH_ALTERNATIVE_URLS=(
+        "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+        "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.tar.gz"
+        "https://alphacephei.com/vosk/models/vosk-model-en-us-0.15.tar.gz"
+    )
+    
+    download_model() {
+        local model_type=$1
+        local model_dir=$2
+        local model_url=$3
+        local alternative_urls=("${@:4}")
         
-        log "Downloading model (this may take a while)..."
+        log "Downloading VOSK ${model_type} model..."
         
-        # Try different URLs
-        download_success=false
-        for url in "${ALTERNATIVE_URLS[@]}"; do
-            log "Trying URL: $url"
-            if wget -O model.tar.gz "$url" 2>/dev/null; then
-                log "Successfully downloaded from: $url"
-                download_success=true
-                break
-            else
-                log "Failed to download from: $url"
+        if [ ! -d "$model_dir" ]; then
+            mkdir -p "$model_dir"
+            cd "$model_dir"
+            
+            log "Downloading ${model_type} model (this may take a while)..."
+            
+            # Try different URLs
+            download_success=false
+            for url in "$model_url" "${alternative_urls[@]}"; do
+                log "Trying URL: $url"
+                if wget -O model.zip "$url" 2>/dev/null; then
+                    log "Successfully downloaded from: $url"
+                    download_success=true
+                    break
+                else
+                    log "Failed to download from: $url"
+                fi
+            done
+            
+            if [ "$download_success" = false ]; then
+                warn "Failed to download ${model_type} model from all URLs"
+                log "Please download manually from: https://alphacephei.com/vosk/models/"
+                log "Or use a different ${model_type} model"
+                return 1
             fi
-        done
-        
-        if [ "$download_success" = false ]; then
-            error "Failed to download VOSK model from all URLs"
-            log "Please download manually from: https://alphacephei.com/vosk/models/"
-            log "Or use a different Czech model"
-            return 1
+            
+            log "Extracting ${model_type} model..."
+            
+            # Handle both .zip and .tar.gz files
+            if [[ "$model_url" == *.zip ]]; then
+                unzip -q model.zip
+                # Find the extracted directory
+                extracted_dir=$(find . -maxdepth 1 -type d -name "vosk-model*" | head -1)
+                if [ -n "$extracted_dir" ]; then
+                    mv "$extracted_dir"/* .
+                    rmdir "$extracted_dir"
+                fi
+            else
+                tar -xzf model.zip
+                # Find the extracted directory
+                extracted_dir=$(find . -maxdepth 1 -type d -name "vosk-model*" | head -1)
+                if [ -n "$extracted_dir" ]; then
+                    mv "$extracted_dir"/* .
+                    rmdir "$extracted_dir"
+                fi
+            fi
+            
+            rm model.zip
+            
+            cd "$INSTALL_DIR"
+            log "VOSK ${model_type} model downloaded and extracted"
+        else
+            log "VOSK ${model_type} model already exists"
         fi
-        
-        log "Extracting model..."
-        tar -xzf model.tar.gz
-        mv vosk-model-small-cs-0.4-sphere/* .
-        rmdir vosk-model-small-cs-0.4-sphere
-        rm model.tar.gz
-        
-        log "VOSK model downloaded and extracted"
-    else
-        log "VOSK model already exists"
-    fi
+    }
+    
+    # Download Czech model
+    download_model "Czech" "$CZECH_MODEL_DIR" "$CZECH_MODEL_URL" "${CZECH_ALTERNATIVE_URLS[@]}"
+    
+    # Download English model
+    download_model "English" "$ENGLISH_MODEL_DIR" "$ENGLISH_MODEL_URL" "${ENGLISH_ALTERNATIVE_URLS[@]}"
+    
+    log "All VOSK models downloaded successfully!"
 }
 
 # Configure audio
 configure_audio() {
     log "Configuring audio system..."
     
-    # Create audio directory
-    mkdir -p "$INSTALL_DIR/audio"
+    # Create sounds directory
+    mkdir -p "$INSTALL_DIR/sounds"
     
     # Generate sample audio files if they don't exist
-    if [ ! -f "$INSTALL_DIR/audio/password_prompt.wav" ]; then
+    if [ ! -f "$INSTALL_DIR/sounds/prompt-0.mp3" ]; then
         log "Creating sample audio files..."
         
         # Create a simple beep sound using sox (if available)
         if command -v sox &> /dev/null; then
-            sox -n -r 16000 -c 1 "$INSTALL_DIR/audio/password_prompt.wav" synth 1 sine 1000
-            sox -n -r 16000 -c 1 "$INSTALL_DIR/audio/success.wav" synth 0.5 sine 2000
-            sox -n -r 16000 -c 1 "$INSTALL_DIR/audio/failure.wav" synth 0.5 sine 500
-            sox -n -r 16000 -c 1 "$INSTALL_DIR/audio/error.wav" synth 1 sine 300
+            sox -n -r 16000 -c 1 "$INSTALL_DIR/sounds/prompt-0.wav" synth 1 sine 1000
+            sox -n -r 16000 -c 1 "$INSTALL_DIR/sounds/success-0.wav" synth 0.5 sine 2000
+            sox -n -r 16000 -c 1 "$INSTALL_DIR/sounds/fail-0.wav" synth 0.5 sine 500
+            sox -n -r 16000 -c 1 "$INSTALL_DIR/sounds/timeout-0.wav" synth 1 sine 300
             log "Created audio files using sox"
         else
             # Create empty files as placeholders
-            touch "$INSTALL_DIR/audio/password_prompt.wav"
-            touch "$INSTALL_DIR/audio/success.wav"
-            touch "$INSTALL_DIR/audio/failure.wav"
-            touch "$INSTALL_DIR/audio/error.wav"
+            touch "$INSTALL_DIR/sounds/prompt-0.mp3"
+            touch "$INSTALL_DIR/sounds/success-0.mp3"
+            touch "$INSTALL_DIR/sounds/fail-0.mp3"
+            touch "$INSTALL_DIR/sounds/timeout-0.mp3"
             log "Created placeholder audio files (sox not available)"
-            log "You can create custom audio files in $INSTALL_DIR/audio/"
+            log "You can create custom audio files in $INSTALL_DIR/sounds/"
         fi
     fi
     
@@ -253,10 +300,11 @@ setup_systemd() {
     log "Setting up systemd service..."
     
     # Copy service file
-    sudo cp "$INSTALL_DIR/systemd/$SERVICE_NAME.service" "/etc/systemd/system/"
+    sudo cp "$INSTALL_DIR/deployment/systemd/$SERVICE_NAME.service" "/etc/systemd/system/"
     
     # Update service file with correct paths
     sudo sed -i "s|/home/pi/voice-recognizer|$INSTALL_DIR|g" "/etc/systemd/system/$SERVICE_NAME.service"
+    sudo sed -i "s|main.py|run_pi.py|g" "/etc/systemd/system/$SERVICE_NAME.service"
     
     # Reload systemd
     sudo systemctl daemon-reload
@@ -275,7 +323,8 @@ set_permissions() {
     sudo chown -R sluchatko:sluchatko "$INSTALL_DIR"
     
     # Set executable permissions
-    chmod +x "$INSTALL_DIR/main.py"
+    chmod +x "$INSTALL_DIR/run_pi.py"
+    chmod +x "$INSTALL_DIR/run_macos.py"
     chmod +x "$INSTALL_DIR/install.sh"
     
     # Set log directory permissions
@@ -291,7 +340,7 @@ create_config() {
     log "Creating configuration..."
     
     # Update config.yaml with correct paths
-    sed -i "s|/home/pi/vosk-model-cs|$INSTALL_DIR/vosk-model-cs|g" "$INSTALL_DIR/config.yaml"
+    sed -i "s|./vosk-model-cs|./models/vosk-model-cs|g" "$INSTALL_DIR/config/config.yaml"
     
     log "Configuration created"
 }
@@ -306,15 +355,15 @@ test_installation() {
     # Test Python imports
     python3 -c "
 import sys
-sys.path.append('.')
+sys.path.insert(0, 'src')
 try:
-    from config_manager import ConfigManager
-    from bluetooth_manager import BluetoothManager
-    from audio_manager import AudioManager
-    from voice_processor import VoiceProcessor
-    from mqtt_client import MQTTClient
-    from button_handler import ButtonHandler
-    from password_manager import PasswordManager
+    from core.config_manager import ConfigManager
+    from core.audio_manager import AudioManager
+    from core.voice_processor import VoiceProcessor
+    from core.mqtt_client import MQTTClient
+    from core.password_manager import PasswordManager
+    from pi_macos.bluetooth_manager import BluetoothManager
+    from pi_macos.button_handler import ButtonHandler
     print('All modules imported successfully')
 except ImportError as e:
     print(f'Import error: {e}')
@@ -336,9 +385,9 @@ main() {
     mkdir -p "$INSTALL_DIR"
     
     # Copy files to installation directory
-    if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
+    if [ "$PROJECT_ROOT" != "$INSTALL_DIR" ]; then
         log "Copying files to installation directory..."
-        cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR/"
+        cp -r "$PROJECT_ROOT"/* "$INSTALL_DIR/"
     fi
     
     # Install dependencies
@@ -348,7 +397,7 @@ main() {
     install_python_deps
     
     # Setup components
-    download_vosk_model
+    download_vosk_models
     configure_audio
     configure_bluetooth
     setup_systemd
@@ -367,7 +416,7 @@ main() {
     log "   pair <device_mac>"
     log "   connect <device_mac>"
     log ""
-    log "2. Configure MQTT broker settings in config.yaml"
+    log "2. Configure MQTT broker settings in config/config.yaml"
     log ""
     log "3. Test the system:"
     log "   sudo systemctl start voice-recognizer"

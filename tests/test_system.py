@@ -9,16 +9,16 @@ import time
 import logging
 from pathlib import Path
 
-# Add current directory to path
-sys.path.append(str(Path(__file__).parent))
+# Add src directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from config_manager import ConfigManager
-from bluetooth_manager import BluetoothManager
-from audio_manager import AudioManager
-from voice_processor import VoiceProcessor
-from mqtt_client import MQTTClient
-from button_handler import ButtonHandler
-from password_manager import PasswordManager
+from core.config_manager import ConfigManager
+from core.audio_manager import AudioManager
+from core.voice_processor import VoiceProcessor
+from core.mqtt_client import MQTTClient
+from core.password_manager import PasswordManager
+from pi_macos.bluetooth_manager import BluetoothManager
+from pi_macos.button_handler import ButtonHandler
 
 
 def setup_logging():

@@ -1,0 +1,9 @@
+{
+  "timestamp": "2025-07-18T11:09:40.101774",
+  "calibration_factor_mm_per_pixel": 0.12737905369484318,
+  "camera_id": 0,
+  "resolution": {
+    "width": 640,
+    "height": 480
+  }
+}

@@ -31,7 +31,8 @@ int currentG = 0;
 int currentB = 0;
 
 #define HOLD_TIME 10000    // 10 seconds in milliseconds
-#define FADE_TIME 3000     // 3 seconds in milliseconds
+#define FADE_TIME_OUT 8000     // 8 seconds for fade-out (color->black)
+#define FADE_TIME_IN 16000     // 16 seconds for fade-in (black->color) - twice as long
 #define FADE_STEPS 100     // Number of steps for smooth fade
 
 // Set DMX channel value
@@ -135,7 +136,11 @@ void updateFade() {
     
     unsigned long fadeElapsed = currentTime - fadeStartTime;
     
-    if (fadeElapsed >= FADE_TIME) {
+    // Determine if this is a fade-in (to color) or fade-out (to black)
+    bool isFadeIn = (fadeTargetR > 0 || fadeTargetG > 0 || fadeTargetB > 0);
+    unsigned long fadeTime = isFadeIn ? FADE_TIME_IN : FADE_TIME_OUT;
+    
+    if (fadeElapsed >= fadeTime) {
         // Fade complete
         currentR = fadeTargetR;
         currentG = fadeTargetG;
@@ -148,10 +153,12 @@ void updateFade() {
         setDMXChannel(2, currentG);
         setDMXChannel(3, currentB);
         
-        Serial.println("Fade complete");
+        Serial.print("Fade complete (");
+        Serial.print(isFadeIn ? "IN" : "OUT");
+        Serial.println(")");
     } else {
         // Continue fade - use linear interpolation for consistent speed
-        float progress = (float)fadeElapsed / (float)FADE_TIME;
+        float progress = (float)fadeElapsed / (float)fadeTime;
         int r = fadeStartR + (int)((fadeTargetR - fadeStartR) * progress);
         int g = fadeStartG + (int)((fadeTargetG - fadeStartG) * progress);
         int b = fadeStartB + (int)((fadeTargetB - fadeStartB) * progress);
@@ -165,6 +172,21 @@ void updateFade() {
             setDMXChannel(1, r);
             setDMXChannel(2, g);
             setDMXChannel(3, b);
+            
+            // Debug fade progress every 500ms
+            static unsigned long lastDebugTime = 0;
+            if (currentTime - lastDebugTime > 500) {
+                Serial.print("Fade progress: ");
+                Serial.print(progress * 100);
+                Serial.print("% RGB(");
+                Serial.print(r);
+                Serial.print(",");
+                Serial.print(g);
+                Serial.print(",");
+                Serial.print(b);
+                Serial.println(")");
+                lastDebugTime = currentTime;
+            }
         }
     }
 }

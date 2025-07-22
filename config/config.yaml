@@ -67,4 +67,4 @@ audio_files:
 
 # Debug Settings
 debug:
-  force_10pm_mode: true  # Force 10pm sound selection for testing 
+  force_10pm_mode: false  # Force 10pm sound selection for testing 

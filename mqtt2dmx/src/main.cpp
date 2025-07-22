@@ -1,27 +1,40 @@
-#include <esp_dmx.h>
+#include <Arduino.h>
+#include <ESPDMX.h>
 
-// Pin definitions for CTC-DRA-10-R2 shield with Wemos D1 (ESP8266)
-#define DMX_DIRECTION_PIN 4 // D2 on Wemos D1 mini, connected to DE/RE (tied together)
-// DI (Data In)  -> TX (GPIO1)
-// RO (Receiver) -> RX (GPIO3)
-// DE/RE         -> D2 (GPIO4)
-// A/B           -> DMX bus
-// VCC           -> 5V
-// GND           -> GND
+DMXESPSerial dmx;
+uint8_t channel_values[4] = {0, 0, 0, 0};
 
 void setup() {
-  dmx_master_enable(DMX_DIRECTION_PIN);
+  Serial.begin(9600);
+  while (!Serial) { delay(10); }
+  Serial.println("DMX Debug Start");
+  dmx.init();
+  delay(200);
 }
 
 void loop() {
-  // Test sequence: turn on each channel to full, one at a time
-  for (int ch = 0; ch < 4; ch++) {
+  for (int ch = 1; ch <= 4; ch++) {
     // Set all channels to 0
-    for (int i = 0; i < 4; i++) {
-      dmx_master_write(i, 0);
+    for (int i = 1; i <= 4; i++) {
+      dmx.write(i, 0);
+      channel_values[i-1] = 0;
     }
-    // Set current channel to max (255)
-    dmx_master_write(ch, 255);
+    // Set current channel to 255
+    dmx.write(ch, 255);
+    channel_values[ch-1] = 255;
+    dmx.update();
+    // Debug print
+    Serial.print("Cycle: channel ");
+    Serial.print(ch);
+    Serial.print(" = 255, others = 0 | Values: ");
+    for (int i = 0; i < 4; i++) {
+      Serial.print("CH");
+      Serial.print(i+1);
+      Serial.print(":");
+      Serial.print(channel_values[i]);
+      Serial.print(" ");
+    }
+    Serial.println();
     delay(500);
   }
 }

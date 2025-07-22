@@ -264,6 +264,14 @@ void loop() {
             case 4: // Blue
                 if (stateElapsed >= HOLD_TIME) {
                     startFadeToColor(0, 0, 0);
+                    state = 5; // Use intermediate state for black
+                    stateStartTime = currentMillis;
+                }
+                break;
+                
+            case 5: // Black (no hold - immediate transition to red)
+                if (!isFading) {
+                    startFadeToColor(255, 0, 0);
                     state = 0;
                     stateStartTime = currentMillis;
                 }

@@ -1,4 +1,6 @@
-numpy==1.26.4
-opencv-python==4.10.0.84
-matplotlib==3.8.4
-pandas==2.2.2 
+# NeoPixel support
+adafruit-blinka>=8.0.0
+adafruit-circuitpython-neopixel>=6.3.0
+
+# GPIO support
+RPi.GPIO>=0.7.0 

@@ -1,39 +1,55 @@
 
 #include <Arduino.h>
+#include <WiFiS3.h>
+#include <ArduinoJson.h>
 
-// DMX configuration for Arduino R4
+// WiFi settings
+const char* ssid = "ChillNaZahrade";     // TODO: Replace with your WiFi credentials
+const char* password = "TaXfGh76";  // TODO: Replace with your WiFi password
+
+// Web server on port 80
+WiFiServer server(80);
+
+// DMX configuration
 #define DMX_TX_PIN 1      // Serial1 TX (D1)
 #define DMX_DE_PIN 2      // Direction Enable for MAX485
-#define DMX_CHANNELS 512  // Number of DMX channels
-
-// DMX timing constants (microseconds)
-#define DMX_BREAK_TIME 92     // 92μs break (DMX512-A standard)
-#define DMX_MAB_TIME 12       // 12μs mark after break
-#define DMX_FRAME_RATE 40     // 40Hz frame rate
+#define DMX_CHANNELS 512  // Total DMX channels
+#define DMX_BREAK_TIME 92 // 92μs break
+#define DMX_MAB_TIME 12   // 12μs mark after break
 #define DMX_FRAME_TIME 25000  // 25ms = 40Hz
 
-// DMX data buffer (512 channels + start code)
-uint8_t dmxData[DMX_CHANNELS] = {0};
+// Demo mode state
+bool demoMode = false;
+unsigned long demoLastUpdate = 0;
+unsigned long demoMoveDelay = 1000;  // Movement delay in ms
+unsigned long demoHoldTime = 5000;   // Hold time in ms
+int demoCurrentStep = 0;  // 0: fade out, 1: move, 2: wait move, 3: fade in, 4: hold
+int demoCurrentPreset = 0;
 
-// Timing variables
+// Current fade values
+float currentFadeProgress = 0.0;
+uint8_t fadeStartColors[6] = {0}; // Dimmer, Strobe, R, G, B, W
+#define FADE_TIME 5000 // 5 seconds fade
+
+// Store preset data statically
+#define MAX_PRESETS 10
+#define CHANNELS_PER_PRESET 11
+uint8_t storedPresets[MAX_PRESETS][CHANNELS_PER_PRESET];
+int numStoredPresets = 0;
+
+// DMX data buffer and timing
+uint8_t dmxData[DMX_CHANNELS] = {0};
 unsigned long lastFrameTime = 0;
 unsigned long frameCount = 0;
 
-// Fade state variables
-bool isFading = false;
-int fadeStep = 0;
-int fadeTargetR = 0, fadeTargetG = 0, fadeTargetB = 0;
-int fadeStartR = 0, fadeStartG = 0, fadeStartB = 0;
+#include "index.h"
 
-// Current RGB values
-int currentR = 0;
-int currentG = 0;
-int currentB = 0;
-
-#define HOLD_TIME 10000    // 10 seconds in milliseconds
-#define FADE_TIME_OUT 8000     // 8 seconds for fade-out (color->black)
-#define FADE_TIME_IN 16000     // 16 seconds for fade-in (black->color) - twice as long
-#define FADE_STEPS 100     // Number of steps for smooth fade
+// Function declarations
+void setDMXChannel(uint16_t channel, uint8_t value);
+void sendDMXBreak();
+void sendDMXFrame();
+void processDemo();
+void handleWebRequest(WiFiClient client);
 
 // Set DMX channel value
 void setDMXChannel(uint16_t channel, uint8_t value) {
@@ -44,260 +60,405 @@ void setDMXChannel(uint16_t channel, uint8_t value) {
 
 // Send DMX break signal
 void sendDMXBreak() {
-    // Disable Serial1 temporarily
     Serial1.end();
-    
-    // Configure pin for manual control
     pinMode(DMX_TX_PIN, OUTPUT);
-    
-    // Generate break signal (92μs LOW)
     digitalWrite(DMX_TX_PIN, LOW);
     delayMicroseconds(DMX_BREAK_TIME);
-    
-    // Mark after break (12μs HIGH)
     digitalWrite(DMX_TX_PIN, HIGH);
     delayMicroseconds(DMX_MAB_TIME);
-    
-    // Re-enable Serial1 for data transmission
     Serial1.begin(250000, SERIAL_8N2);
 }
 
 // Send complete DMX frame
 void sendDMXFrame() {
     frameCount++;
-    
-    // Enable MAX485 driver
     digitalWrite(DMX_DE_PIN, HIGH);
-    
-    // Send break and mark-after-break
     sendDMXBreak();
-    
-    // Send start code (0x00)
     Serial1.write((uint8_t)0x00);
-    
-    // Send all 512 channels
     for (int i = 0; i < DMX_CHANNELS; i++) {
         Serial1.write((uint8_t)dmxData[i]);
     }
-    
-    // Wait for transmission to complete
     Serial1.flush();
-    
-    // Disable MAX485 driver
     digitalWrite(DMX_DE_PIN, LOW);
-    
-    // Debug output every 100 frames
-    if (frameCount % 100 == 0) {
-        Serial.print("Sent frame #");
-        Serial.print(frameCount);
-        Serial.print(" RGB(");
-        Serial.print(currentR);
-        Serial.print(",");
-        Serial.print(currentG);
-        Serial.print(",");
-        Serial.print(currentB);
-        Serial.println(")");
-    }
 }
 
-// Start fade to color (non-blocking)
-void startFadeToColor(int targetR, int targetG, int targetB) {
-    fadeStartR = currentR;
-    fadeStartG = currentG;
-    fadeStartB = currentB;
-    fadeTargetR = targetR;
-    fadeTargetG = targetG;
-    fadeTargetB = targetB;
-    fadeStep = 0;
-    isFading = true;
-    
-    // Don't update DMX channels here - let updateFade() handle it
-    // This prevents immediate color change before fade starts
-    
-    Serial.print("Starting fade to RGB(");
-    Serial.print(targetR);
-    Serial.print(",");
-    Serial.print(targetG);
-    Serial.print(",");
-    Serial.print(targetB);
-    Serial.println(")");
-}
+// Demo mode functions
+void processDemo() {
+    if (!demoMode) return;
 
-// Update fade (non-blocking)
-void updateFade() {
-    if (!isFading) return;
-    
     unsigned long currentTime = millis();
-    static unsigned long fadeStartTime = 0;
-    
-    if (fadeStartTime == 0) {
-        fadeStartTime = currentTime;
-    }
-    
-    unsigned long fadeElapsed = currentTime - fadeStartTime;
-    
-    // Determine if this is a fade-in (to color) or fade-out (to black)
-    bool isFadeIn = (fadeTargetR > 0 || fadeTargetG > 0 || fadeTargetB > 0);
-    unsigned long fadeTime = isFadeIn ? FADE_TIME_IN : FADE_TIME_OUT;
-    
-    if (fadeElapsed >= fadeTime) {
-        // Fade complete
-        currentR = fadeTargetR;
-        currentG = fadeTargetG;
-        currentB = fadeTargetB;
-        isFading = false;
-        fadeStartTime = 0;
-        
-        // Update DMX channels to final values
-        setDMXChannel(1, currentR);
-        setDMXChannel(2, currentG);
-        setDMXChannel(3, currentB);
-        
-        Serial.print("Fade complete (");
-        Serial.print(isFadeIn ? "IN" : "OUT");
+    unsigned long stepTime = currentTime - demoLastUpdate;
+
+    // Debug current state
+    static int lastStep = -1;
+    if (demoCurrentStep != lastStep) {
+        Serial.print("Demo step changed to: ");
+        Serial.print(demoCurrentStep);
+        Serial.print(" (Preset: ");
+        Serial.print(demoCurrentPreset);
         Serial.println(")");
-    } else {
-        // Continue fade - use linear interpolation for consistent speed
-        float progress = (float)fadeElapsed / (float)fadeTime;
-        int r = fadeStartR + (int)((fadeTargetR - fadeStartR) * progress);
-        int g = fadeStartG + (int)((fadeTargetG - fadeStartG) * progress);
-        int b = fadeStartB + (int)((fadeTargetB - fadeStartB) * progress);
-        
-        // Only update if values changed
-        if (r != currentR || g != currentG || b != currentB) {
-            currentR = r;
-            currentG = g;
-            currentB = b;
+        lastStep = demoCurrentStep;
+
+        // Store start values at the beginning of fades
+        if (demoCurrentStep == 0) { // Start of fade out
+            fadeStartColors[0] = dmxData[5];  // Dimmer
+            fadeStartColors[1] = dmxData[6];  // Strobe
+            fadeStartColors[2] = dmxData[7];  // Red
+            fadeStartColors[3] = dmxData[8];  // Green
+            fadeStartColors[4] = dmxData[9];  // Blue
+            fadeStartColors[5] = dmxData[10]; // White
+            currentFadeProgress = 0.0;
+            Serial.println("Starting fade out from:");
+            Serial.print("Dimmer: "); Serial.print(fadeStartColors[0]);
+            Serial.print(" RGB: "); Serial.print(fadeStartColors[2]);
+            Serial.print(","); Serial.print(fadeStartColors[3]);
+            Serial.print(","); Serial.println(fadeStartColors[4]);
+        }
+        else if (demoCurrentStep == 3) { // Start of fade in
+            memset(fadeStartColors, 0, sizeof(fadeStartColors));
+            currentFadeProgress = 0.0;
+            Serial.println("Starting fade in");
+        }
+    }
+
+    switch (demoCurrentStep) {
+        case 0: // Fade out colors
+            // Calculate fade progress (0.0 to 1.0)
+            currentFadeProgress = min(1.0, (float)stepTime / FADE_TIME);
             
-            setDMXChannel(1, r);
-            setDMXChannel(2, g);
-            setDMXChannel(3, b);
+            // Linear interpolation from current colors to black
+            for (int i = 0; i < 6; i++) {
+                uint8_t targetValue = 0;
+                uint8_t currentValue = fadeStartColors[i] + (targetValue - fadeStartColors[i]) * currentFadeProgress;
+                setDMXChannel(6 + i, currentValue);  // Channels 6-11 (Dimmer through White)
+            }
+
+            if (stepTime % 1000 == 0) { // Debug print every second
+                Serial.print("Fade out progress: ");
+                Serial.print(currentFadeProgress * 100);
+                Serial.println("%");
+            }
+
+            if (currentFadeProgress >= 1.0) {
+                Serial.println("Fade out complete");
+                demoCurrentStep = 1;
+                demoLastUpdate = currentTime;
+            }
+            break;
+
+        case 1: // Change position
+            Serial.println("Changing position...");
+            Serial.print("Setting channels from preset ");
+            Serial.println(demoCurrentPreset);
             
-            // Debug fade progress every 500ms
-            static unsigned long lastDebugTime = 0;
-            if (currentTime - lastDebugTime > 500) {
-                Serial.print("Fade progress: ");
-                Serial.print(progress * 100);
-                Serial.print("% RGB(");
-                Serial.print(r);
-                Serial.print(",");
-                Serial.print(g);
-                Serial.print(",");
-                Serial.print(b);
-                Serial.println(")");
-                lastDebugTime = currentTime;
+            // Set position channels from stored preset
+            setDMXChannel(1, storedPresets[demoCurrentPreset][0]); // Pan
+            setDMXChannel(2, storedPresets[demoCurrentPreset][1]); // Pan Fine
+            setDMXChannel(3, storedPresets[demoCurrentPreset][2]); // Tilt
+            setDMXChannel(4, storedPresets[demoCurrentPreset][3]); // Tilt Fine
+            setDMXChannel(5, storedPresets[demoCurrentPreset][4]); // Speed
+            
+            demoCurrentStep = 2;
+            demoLastUpdate = currentTime;
+            break;
+
+        case 2: // Wait for movement
+            if (stepTime >= demoMoveDelay) {
+                Serial.print("Movement wait complete (");
+                Serial.print(demoMoveDelay);
+                Serial.println("ms)");
+                demoCurrentStep = 3;
+                demoLastUpdate = currentTime;
+            }
+            break;
+
+        case 3: // Fade in colors
+            // Calculate fade progress (0.0 to 1.0)
+            currentFadeProgress = min(1.0, (float)stepTime / FADE_TIME);
+            
+            // Linear interpolation from black to target colors
+            setDMXChannel(6, fadeStartColors[0] + (storedPresets[demoCurrentPreset][5] - fadeStartColors[0]) * currentFadeProgress);   // Dimmer
+            setDMXChannel(7, fadeStartColors[1] + (storedPresets[demoCurrentPreset][6] - fadeStartColors[1]) * currentFadeProgress);   // Strobe
+            setDMXChannel(8, fadeStartColors[2] + (storedPresets[demoCurrentPreset][7] - fadeStartColors[2]) * currentFadeProgress);   // Red
+            setDMXChannel(9, fadeStartColors[3] + (storedPresets[demoCurrentPreset][8] - fadeStartColors[3]) * currentFadeProgress);   // Green
+            setDMXChannel(10, fadeStartColors[4] + (storedPresets[demoCurrentPreset][9] - fadeStartColors[4]) * currentFadeProgress);  // Blue
+            setDMXChannel(11, fadeStartColors[5] + (storedPresets[demoCurrentPreset][10] - fadeStartColors[5]) * currentFadeProgress); // White
+
+            if (stepTime % 1000 == 0) { // Debug print every second
+                Serial.print("Fade in progress: ");
+                Serial.print(currentFadeProgress * 100);
+                Serial.println("%");
+            }
+
+            if (currentFadeProgress >= 1.0) {
+                Serial.println("Fade in complete");
+                demoCurrentStep = 4;
+                demoLastUpdate = currentTime;
+            }
+            break;
+
+        case 4: // Hold
+            if (stepTime >= demoHoldTime) {
+                Serial.print("Hold complete, moving to next preset (");
+                Serial.print(demoHoldTime);
+                Serial.println("ms)");
+                demoCurrentStep = 0;
+                demoLastUpdate = currentTime;
+                demoCurrentPreset = (demoCurrentPreset + 1) % numStoredPresets;
+            }
+            break;
+    }
+}
+
+// Handle incoming web requests
+void handleWebRequest(WiFiClient client) {
+    String currentLine = "";
+    String httpMethod = "";
+    String path = "";
+    bool headersDone = false;
+    String body = "";
+    
+    unsigned long timeout = millis();
+    
+    while (client.connected() && millis() - timeout < 1000) {
+        if (client.available()) {
+            char c = client.read();
+            timeout = millis();
+            
+            if (!headersDone) {
+                if (c == '\n') {
+                    if (currentLine.length() == 0) {
+                        headersDone = true;
+                        
+                        if (httpMethod == "POST") {
+                            while (client.available()) {
+                                body += (char)client.read();
+                            }
+                        }
+                        
+                        if (path == "/") {
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: text/html");
+                            client.println();
+                            client.print(INDEX_HTML);
+                        }
+                        else if (path == "/api/channels" && httpMethod == "POST") {
+                            StaticJsonDocument<200> doc;
+                            DeserializationError error = deserializeJson(doc, body);
+                            
+                            if (!error) {
+                                int channel = doc["channel"];
+                                int value = doc["value"];
+                                
+                                if (channel >= 1 && channel <= DMX_CHANNELS) {
+                                    setDMXChannel(channel, value);
+                                    client.println("HTTP/1.1 200 OK");
+                                    client.println("Content-Type: application/json");
+                                    client.println();
+                                    client.println("{\"status\":\"ok\"}");
+                                } else {
+                                    client.println("HTTP/1.1 400 Bad Request");
+                                    client.println();
+                                }
+                            }
+                        }
+                        else if (path == "/api/channels/batch" && httpMethod == "POST") {
+                            StaticJsonDocument<1024> doc;
+                            DeserializationError error = deserializeJson(doc, body);
+                            
+                            if (!error) {
+                                JsonArray updates = doc["updates"];
+                                bool valid = true;
+                                
+                                for (JsonObject update : updates) {
+                                    int channel = update["channel"];
+                                    int value = update["value"];
+                                    if (channel < 1 || channel > DMX_CHANNELS || value < 0 || value > 255) {
+                                        valid = false;
+                                        break;
+                                    }
+                                }
+                                
+                                if (valid) {
+                                    for (JsonObject update : updates) {
+                                        setDMXChannel(update["channel"], update["value"]);
+                                    }
+                                    
+                                    client.println("HTTP/1.1 200 OK");
+                                    client.println("Content-Type: application/json");
+                                    client.println();
+                                    client.println("{\"status\":\"ok\"}");
+                                } else {
+                                    client.println("HTTP/1.1 400 Bad Request");
+                                    client.println();
+                                }
+                            }
+                        }
+                        else if (path == "/api/demo/start" && httpMethod == "POST") {
+                            StaticJsonDocument<4096> doc;
+                            DeserializationError error = deserializeJson(doc, body);
+                            
+                            if (!error) {
+                                Serial.println("Starting demo mode...");
+                                Serial.print("Request body: ");
+                                Serial.println(body);
+                                
+                                JsonArray presets = doc["presets"];
+                                if (presets.isNull()) {
+                                    Serial.println("ERROR: No presets array in request!");
+                                    client.println("HTTP/1.1 400 Bad Request");
+                                    client.println();
+                                    return;
+                                }
+
+                                Serial.print("Number of presets: ");
+                                Serial.println(presets.size());
+
+                                if (presets.size() < 2 || presets.size() > MAX_PRESETS) {
+                                    Serial.println("ERROR: Invalid number of presets!");
+                                    client.println("HTTP/1.1 400 Bad Request");
+                                    client.println();
+                                    return;
+                                }
+
+                                // Store presets in our static array
+                                numStoredPresets = 0;
+                                for (JsonObject preset : presets) {
+                                    if (!preset.containsKey("values")) {
+                                        Serial.println("ERROR: Preset missing values array!");
+                                        continue;
+                                    }
+
+                                    JsonArray values = preset["values"];
+                                    if (values.size() < CHANNELS_PER_PRESET) {
+                                        Serial.println("ERROR: Preset values array too small!");
+                                        continue;
+                                    }
+
+                                    // Copy values to our static array
+                                    for (int i = 0; i < CHANNELS_PER_PRESET; i++) {
+                                        storedPresets[numStoredPresets][i] = values[i];
+                                    }
+                                    numStoredPresets++;
+
+                                    Serial.print("Stored preset ");
+                                    Serial.print(numStoredPresets - 1);
+                                    Serial.print(": Pan=");
+                                    Serial.print(storedPresets[numStoredPresets-1][0]);
+                                    Serial.print(", Tilt=");
+                                    Serial.println(storedPresets[numStoredPresets-1][2]);
+                                }
+
+                                if (numStoredPresets < 2) {
+                                    Serial.println("ERROR: Not enough valid presets!");
+                                    client.println("HTTP/1.1 400 Bad Request");
+                                    client.println();
+                                    return;
+                                }
+
+                                // Set demo parameters
+                                demoMoveDelay = doc["moveDelay"] | 1000;
+                                demoHoldTime = doc["holdTime"] | 5000;
+                                demoCurrentPreset = 0;
+                                demoCurrentStep = 0;
+                                demoLastUpdate = millis();
+                                demoMode = true;
+
+                                Serial.print("Demo started with ");
+                                Serial.print(numStoredPresets);
+                                Serial.println(" presets");
+                                Serial.print("Move delay: ");
+                                Serial.print(demoMoveDelay);
+                                Serial.print("ms, Hold time: ");
+                                Serial.print(demoHoldTime);
+                                Serial.println("ms");
+                                
+                                client.println("HTTP/1.1 200 OK");
+                                client.println("Content-Type: application/json");
+                                client.println();
+                                client.println("{\"status\":\"ok\"}");
+                            } else {
+                                Serial.print("ERROR: JSON parse error - ");
+                                Serial.println(error.c_str());
+                                client.println("HTTP/1.1 400 Bad Request");
+                                client.println();
+                            }
+                        }
+                        else if (path == "/api/demo/stop" && httpMethod == "POST") {
+                            demoMode = false;
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: application/json");
+                            client.println();
+                            client.println("{\"status\":\"ok\"}");
+                        }
+                        break;
+                    } else {
+                        if (httpMethod == "") {
+                            int spaceIndex = currentLine.indexOf(' ');
+                            if (spaceIndex != -1) {
+                                httpMethod = currentLine.substring(0, spaceIndex);
+                                path = currentLine.substring(spaceIndex + 1, currentLine.indexOf(' ', spaceIndex + 1));
+                            }
+                        }
+                        currentLine = "";
+                    }
+                } else if (c != '\r') {
+                    currentLine += c;
+                }
             }
         }
     }
+    client.stop();
 }
 
 void setup() {
-    // Initialize USB Serial for debug output
+    // Initialize Serial for debugging
     Serial.begin(115200);
-    while (!Serial) { delay(10); }
-    Serial.println("Arduino R4 DMX Start");
+    while (!Serial) delay(10);
+    Serial.println("Arduino R4 DMX Web Controller");
     
-    // Initialize DMX pins
+    // Initialize DMX
     pinMode(DMX_DE_PIN, OUTPUT);
-    digitalWrite(DMX_DE_PIN, LOW);  // Disable driver initially
-    
-    // Initialize Serial1 for DMX (250k baud, 8N2)
+    digitalWrite(DMX_DE_PIN, LOW);
     Serial1.begin(250000, SERIAL_8N2);
     
-    Serial.println("DMX hardware initialized");
-    Serial.println("Serial1: 250k baud, 8N2");
-    Serial.println("Break: 92μs, MAB: 12μs");
+    // Set initial DMX values
+    setDMXChannel(2, 128);  // Pan Fine = 128
+    setDMXChannel(4, 128);  // Tilt Fine = 128
     
-    // Start with black and fade to red
-    currentR = 0;
-    currentG = 0;
-    currentB = 0;
-    setDMXChannel(1, 0);
-    setDMXChannel(2, 0);
-    setDMXChannel(3, 0);
+    // Initialize WiFi
+    WiFi.begin(ssid, password);
+    Serial.print("Connecting to WiFi");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println();
     
-    // Don't start fade immediately - let it start in the loop
-    // startFadeToColor(255, 0, 0);
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    
+    // Start web server
+    server.begin();
+    
+    Serial.println("System ready!");
 }
 
 void loop() {
-    // Send DMX frame at 40Hz
-    unsigned long currentTime = millis();
-    if (currentTime - lastFrameTime >= 25) { // 40Hz = 25ms
+    // Continue sending DMX frames at 40Hz
+    unsigned long currentTime = micros();
+    if (currentTime - lastFrameTime >= DMX_FRAME_TIME) {
         sendDMXFrame();
         lastFrameTime = currentTime;
     }
     
-    // Update fade (non-blocking)
-    updateFade();
+    if (demoMode) {
+        processDemo();
+    }
     
-    // State machine for color sequence
-    static int state = -1; // Start at -1 to handle initial state
-    static unsigned long stateStartTime = 0;
-    
-    if (!isFading) {
-        unsigned long currentMillis = millis();
-        
-        if (stateStartTime == 0) {
-            stateStartTime = currentMillis;
-        }
-        
-        unsigned long stateElapsed = currentMillis - stateStartTime;
-        
-        switch (state) {
-            case -1: // Initial state - start fade to red
-                startFadeToColor(255, 0, 0);
-                state = 0;
-                stateStartTime = currentMillis;
-                break;
-                
-            case 0: // Red
-                if (stateElapsed >= HOLD_TIME) {
-                    startFadeToColor(0, 0, 0);
-                    state = 1;
-                    stateStartTime = currentMillis;
-                }
-                break;
-                
-            case 1: // Black (no hold - immediate transition)
-                if (!isFading) {
-                    startFadeToColor(0, 255, 0);
-                    state = 2;
-                    stateStartTime = currentMillis;
-                }
-                break;
-                
-            case 2: // Green
-                if (stateElapsed >= HOLD_TIME) {
-                    startFadeToColor(0, 0, 0);
-                    state = 3;
-                    stateStartTime = currentMillis;
-                }
-                break;
-                
-            case 3: // Black (no hold - immediate transition)
-                if (!isFading) {
-                    startFadeToColor(0, 0, 255);
-                    state = 4;
-                    stateStartTime = currentMillis;
-                }
-                break;
-                
-            case 4: // Blue
-                if (stateElapsed >= HOLD_TIME) {
-                    startFadeToColor(0, 0, 0);
-                    state = 5; // Use intermediate state for black
-                    stateStartTime = currentMillis;
-                }
-                break;
-                
-            case 5: // Black (no hold - immediate transition to red)
-                if (!isFading) {
-                    startFadeToColor(255, 0, 0);
-                    state = 0;
-                    stateStartTime = currentMillis;
-                }
-                break;
-        }
+    // Handle web clients
+    WiFiClient client = server.available();
+    if (client) {
+        handleWebRequest(client);
     }
 }

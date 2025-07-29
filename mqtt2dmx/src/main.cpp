@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <WiFiS3.h>
 #include <ArduinoJson.h>
+#include <EEPROM.h>
 
 // WiFi settings
 const char* ssid = "ChillNaZahrade";     // TODO: Replace with your WiFi credentials
@@ -18,6 +19,22 @@ WiFiServer server(80);
 #define DMX_MAB_TIME 12   // 12μs mark after break
 #define DMX_FRAME_TIME 25000  // 25ms = 40Hz
 
+// Demo mode state & preset storage
+#define MAX_PRESETS 10
+#define CHANNELS_PER_PRESET 11
+
+// EEPROM configuration
+#define EEPROM_ADDR 0
+#define EEPROM_MAGIC 0x444D5844 // "DMXD"
+
+struct DemoConfig {
+  uint32_t magic;
+  uint8_t numPresets;
+  unsigned long moveDelay;
+  unsigned long holdTime;
+  uint8_t presets[MAX_PRESETS][CHANNELS_PER_PRESET];
+};
+
 // Demo mode state
 bool demoMode = false;
 unsigned long demoLastUpdate = 0;
@@ -32,8 +49,6 @@ uint8_t fadeStartColors[6] = {0}; // Dimmer, Strobe, R, G, B, W
 #define FADE_TIME 5000 // 5 seconds fade
 
 // Store preset data statically
-#define MAX_PRESETS 10
-#define CHANNELS_PER_PRESET 11
 uint8_t storedPresets[MAX_PRESETS][CHANNELS_PER_PRESET];
 int numStoredPresets = 0;
 
@@ -50,6 +65,9 @@ void sendDMXBreak();
 void sendDMXFrame();
 void processDemo();
 void handleWebRequest(WiFiClient client);
+void saveDemoToEEPROM();
+void clearDemoFromEEPROM();
+void loadDemoFromEEPROM();
 
 // Set DMX channel value
 void setDMXChannel(uint16_t channel, uint8_t value) {
@@ -208,6 +226,46 @@ void processDemo() {
             }
             break;
     }
+}
+
+void saveDemoToEEPROM() {
+  DemoConfig config;
+  config.magic = EEPROM_MAGIC;
+  config.numPresets = numStoredPresets;
+  config.moveDelay = demoMoveDelay;
+  config.holdTime = demoHoldTime;
+  memcpy(config.presets, storedPresets, sizeof(storedPresets));
+
+  Serial.println("Saving demo to EEPROM...");
+  EEPROM.put(EEPROM_ADDR, config);
+  Serial.println("Save complete.");
+}
+
+void clearDemoFromEEPROM() {
+  Serial.println("Clearing demo from EEPROM...");
+  uint32_t magic = 0; // Invalidate the magic number
+  EEPROM.put(EEPROM_ADDR, magic);
+  Serial.println("EEPROM cleared.");
+}
+
+void loadDemoFromEEPROM() {
+  DemoConfig config;
+  EEPROM.get(EEPROM_ADDR, config);
+
+  if (config.magic == EEPROM_MAGIC) {
+    Serial.println("Found valid demo in EEPROM. Starting automatically.");
+    numStoredPresets = config.numPresets;
+    demoMoveDelay = config.moveDelay;
+    demoHoldTime = config.holdTime;
+    memcpy(storedPresets, config.presets, sizeof(storedPresets));
+
+    demoCurrentPreset = 0;
+    demoCurrentStep = 0;
+    demoLastUpdate = millis();
+    demoMode = true;
+  } else {
+    Serial.println("No valid demo found in EEPROM.");
+  }
 }
 
 // Handle incoming web requests
@@ -373,6 +431,8 @@ void handleWebRequest(WiFiClient client) {
                                 Serial.print(demoHoldTime);
                                 Serial.println("ms");
                                 
+                                saveDemoToEEPROM(); // Save the new demo
+                                
                                 client.println("HTTP/1.1 200 OK");
                                 client.println("Content-Type: application/json");
                                 client.println();
@@ -386,6 +446,7 @@ void handleWebRequest(WiFiClient client) {
                         }
                         else if (path == "/api/demo/stop" && httpMethod == "POST") {
                             demoMode = false;
+                            clearDemoFromEEPROM(); // Clear auto-start
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println();
@@ -442,6 +503,8 @@ void setup() {
     server.begin();
     
     Serial.println("System ready!");
+
+    loadDemoFromEEPROM(); // Load and auto-start if present
 }
 
 void loop() {

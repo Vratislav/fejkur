@@ -141,13 +141,11 @@ class TestConditionRecorder:
             print(f"Frames saved in: {self.recording_dir}")
             
     def write_frame(self, frame):
-        """Save frame as individual image file with metadata"""
+        """Save frame as individual image file without overlays"""
         if self.recording:
-            # Add overlay with phase and timing information
-            overlay_frame = self.add_info_overlay(frame)
-            
+            # Save clean frame without overlays for better analysis
             frame_filename = f"{self.recording_dir}/frame_{self.frame_count:06d}.jpg"
-            cv2.imwrite(frame_filename, overlay_frame)
+            cv2.imwrite(frame_filename, frame)
             self.frame_count += 1
             
             # Print progress every 25 frames

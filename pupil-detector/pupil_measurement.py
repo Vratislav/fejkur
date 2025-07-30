@@ -12,6 +12,14 @@ import RPi.GPIO as GPIO
 from rpi_ws281x import PixelStrip, Color
 from datetime import datetime
 
+# Import JEOresearch EyeTracker functions
+import sys
+sys.path.append('./EyeTracker')
+from OrloskyPupilDetectorRaspberryPi import (
+    crop_to_aspect_ratio, apply_binary_threshold, get_darkest_area,
+    mask_outside_square, filter_contours_by_area_and_return_largest
+)
+
 # Fix display environment for Pi
 os.environ.pop('DISPLAY', None)  # Remove any SSH forwarded display
 os.environ.pop('SSH_CLIENT', None)  # Remove SSH indicators
@@ -29,8 +37,8 @@ LED_INVERT = False   # True to invert the signal
 PROXIMITY_PIN = 4    # GPIO pin for proximity sensor
 IR_LED_PIN = 13     # GPIO pin for IR LED (PWM1)
 IR_LED_FREQ = 100   # PWM frequency for IR LED
-STABLE_THRESHOLD = 2.0  # Maximum allowed pupil size variation to consider stable (in pixels)
-STABLE_FRAMES = 10   # Number of frames pupil size must be stable for
+STABLE_THRESHOLD = 3  # Maximum allowed pupil size variation to consider stable (in pixels) - more stringent
+STABLE_FRAMES = 10   # Number of frames pupil size must be stable for - more frames for stability
 
 class CustomOutput(FileOutput):
     """Custom output that can handle overlay frames"""
@@ -55,6 +63,9 @@ class SimplePupilMeasurement:
         self.measurement_data = {}
         self.current_ir_duty = 0  # Track current IR LED duty cycle
         self.gpio_initialized = False  # Track GPIO initialization
+        
+        # Always start recording to save all frames
+        self.start_recording()
         
         self.setup_camera()
         self.setup_gpio()
@@ -162,7 +173,7 @@ class SimplePupilMeasurement:
             print(f"Frames saved in: {self.recording_dir}")
             
     def write_frame_to_video(self, frame):
-        """Save frame as individual image file"""
+        """Save frame as individual image file - always save regardless of recording flag"""
         if self.recording:
             frame_filename = f"{self.recording_dir}/frame_{self.frame_count:06d}.jpg"
             cv2.imwrite(frame_filename, frame)
@@ -171,20 +182,16 @@ class SimplePupilMeasurement:
             # Print progress every 50 frames
             if self.frame_count % 50 == 0:
                 print(f"Recorded {self.frame_count} frames...")
+        else:
+            # Even when not recording, save frames if directory exists
+            if self.recording_dir and os.path.exists(self.recording_dir):
+                frame_filename = f"{self.recording_dir}/frame_{self.frame_count:06d}.jpg"
+                cv2.imwrite(frame_filename, frame)
+                self.frame_count += 1
             
-    def add_debug_overlay(self, frame, pupil_x=None, pupil_y=None, pupil_radius=None):
-        """Add debug overlay to frame with measurement information"""
+    def add_debug_overlay(self, frame, pupil_x=None, pupil_y=None, pupil_radius=None, ellipse=None):
+        """Add debug overlay to frame with measurement information - matches JEOresearch visualization"""
         overlay_frame = frame.copy()
-        
-        # Add center crosshair for reference
-        height, width = frame.shape[:2]
-        center_x, center_y = width // 2, height // 2
-        cv2.line(overlay_frame, (center_x-20, center_y), (center_x+20, center_y), (128, 128, 128), 1)
-        cv2.line(overlay_frame, (center_x, center_y-20), (center_x, center_y+20), (128, 128, 128), 1)
-        
-        # Add search area circle
-        search_radius = min(width, height) // 3
-        cv2.circle(overlay_frame, (center_x, center_y), search_radius, (64, 64, 64), 1)
         
         # Add phase information
         cv2.putText(overlay_frame, f"Phase: {self.current_phase}", (10, 30),
@@ -200,29 +207,19 @@ class SimplePupilMeasurement:
         cv2.putText(overlay_frame, ir_status, (10, 90),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         
-        # Add pupil detection info
-        if pupil_radius is not None:
-            # Draw circle around detected pupil - use different color based on location
-            distance_from_center = np.sqrt((pupil_x - center_x)**2 + (pupil_y - center_y)**2)
-            if distance_from_center < search_radius:
-                color = (0, 255, 0)  # Green for good detection
-            else:
-                color = (0, 255, 255)  # Yellow for detection outside expected area
-                
-            cv2.circle(overlay_frame, (pupil_x, pupil_y), pupil_radius, color, 2)
-            cv2.circle(overlay_frame, (pupil_x, pupil_y), 2, color, -1)
+        # Add pupil detection info - use JEOresearch style visualization
+        if pupil_radius is not None and ellipse is not None:
+            # Draw ellipse like JEOresearch algorithm (green ellipse, yellow center dot)
+            cv2.ellipse(overlay_frame, ellipse, (0, 255, 0), 2)  # Green ellipse
+            cv2.circle(overlay_frame, (pupil_x, pupil_y), 3, (255, 255, 0), -1)  # Yellow center dot
             
             # Add pupil size text
             cv2.putText(overlay_frame, f"Pupil: ({pupil_x}, {pupil_y}) R={pupil_radius}", (10, 120),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
-            
-            # Add distance from center
-            cv2.putText(overlay_frame, f"Distance from center: {distance_from_center:.1f}px", (10, 140),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
             
             # Add stability indicator
             stability_frames = len(self.last_pupil_sizes)
-            cv2.putText(overlay_frame, f"Stability: {stability_frames}/{STABLE_FRAMES}", (10, 160),
+            cv2.putText(overlay_frame, f"Stability: {stability_frames}/{STABLE_FRAMES}", (10, 140),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1)
         else:
             cv2.putText(overlay_frame, "No pupil detected", (10, 120),
@@ -230,17 +227,17 @@ class SimplePupilMeasurement:
         
         # Add measurement data if available
         if 'baseline_radius' in self.measurement_data:
-            cv2.putText(overlay_frame, f"Baseline: {self.measurement_data['baseline_radius']}", (10, 190),
+            cv2.putText(overlay_frame, f"Baseline: {self.measurement_data['baseline_radius']}", (10, 160),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         
         if 'response_radius' in self.measurement_data:
-            cv2.putText(overlay_frame, f"Response: {self.measurement_data['response_radius']}", (10, 220),
+            cv2.putText(overlay_frame, f"Response: {self.measurement_data['response_radius']}", (10, 190),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
             
             # Calculate and show change
             change = ((self.measurement_data['response_radius'] - self.measurement_data['baseline_radius']) / 
                      self.measurement_data['baseline_radius']) * 100
-            cv2.putText(overlay_frame, f"Change: {change:.1f}%", (10, 250),
+            cv2.putText(overlay_frame, f"Change: {change:.1f}%", (10, 220),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         
         return overlay_frame
@@ -261,76 +258,94 @@ class SimplePupilMeasurement:
             self.current_ir_duty = duty_cycle
             print(f"IR LED set to {duty_cycle}%")
         
-    def detect_pupil(self, frame: np.ndarray) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        """Detect pupil in the frame using OpenCV - improved to avoid LED reflections"""
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Apply stronger blur to reduce noise
-        gray = cv2.GaussianBlur(gray, (15, 15), 0)
-        
-        # Create a mask to focus on the center area (where pupil should be)
-        height, width = gray.shape
-        center_x, center_y = width // 2, height // 2
-        mask = np.zeros(gray.shape, dtype=np.uint8)
-        cv2.circle(mask, (center_x, center_y), min(width, height) // 3, 255, -1)
-        
-        # Apply mask to focus on center region
-        masked_gray = cv2.bitwise_and(gray, mask)
-        
-        # Invert the image so dark areas (pupils) become bright
-        inverted = cv2.bitwise_not(masked_gray)
-        
-        # Apply threshold to isolate dark regions (pupils)
-        _, thresh = cv2.threshold(inverted, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # Use HoughCircles on the thresholded image to find dark circular regions
-        circles = cv2.HoughCircles(
-            thresh, 
-            cv2.HOUGH_GRADIENT, 
-            dp=1.5,           # Inverse ratio of accumulator resolution
-            minDist=80,       # Minimum distance between circle centers
-            param1=50,        # Upper threshold for edge detection
-            param2=20,        # Accumulator threshold for center detection (lower = more sensitive)
-            minRadius=8,      # Minimum circle radius
-            maxRadius=40      # Maximum circle radius
-        )
-        
-        if circles is not None:
-            circles = np.round(circles[0, :]).astype("int")
+    def detect_pupil(self, frame: np.ndarray) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[tuple]]:
+        """Detect pupil using JEOresearch EyeTracker algorithm with optimized parameters"""
+        try:
+            # Crop to aspect ratio (4:3)
+            frame = crop_to_aspect_ratio(frame)
             
-            # Filter circles based on additional criteria
-            valid_circles = []
-            for (x, y, r) in circles:
-                # Check if circle is within frame boundaries
-                if x - r > 0 and x + r < width and y - r > 0 and y + r < height:
-                    # Check if the area is actually dark (pupil-like)
-                    roi = gray[y-r:y+r, x-r:x+r]
-                    if roi.size > 0:
-                        mean_intensity = np.mean(roi)
-                        # Pupil should be darker than average
-                        if mean_intensity < np.mean(gray) * 0.7:  # 70% of average brightness
-                            valid_circles.append((x, y, r, mean_intensity))
+            # Get darkest area with optimized ignore_bounds=60
+            darkest_point = self.get_darkest_area_optimized(frame)
             
-            if valid_circles:
-                # Sort by darkness (lowest mean intensity first) and size
-                valid_circles.sort(key=lambda c: (c[3], -c[2]))  # Darkest first, then largest
-                x, y, r, _ = valid_circles[0]
-                return (x, y, r)
+            if darkest_point is None:
+                return (None, None, None, None)
+            
+            # Convert to grayscale
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            # Get darkest pixel value
+            darkest_pixel_value = gray_frame[darkest_point[1], darkest_point[0]]
+            
+            # Apply binary threshold with default added_threshold=15
+            thresholded_image = apply_binary_threshold(gray_frame, darkest_pixel_value, 15)
+            
+            # Mask outside square with default mask_size=250
+            thresholded_image = mask_outside_square(thresholded_image, darkest_point, 250)
+            
+            # Process with JEOresearch algorithm
+            kernel_size = 5
+            kernel = np.ones((kernel_size, kernel_size), np.uint8)
+            dilated_image = cv2.dilate(thresholded_image, kernel, iterations=2)
+            
+            # Find contours
+            contours, _ = cv2.findContours(dilated_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Filter contours with default parameters
+            reduced_contours = filter_contours_by_area_and_return_largest(contours, 1000, 3)
+            
+            if len(reduced_contours) > 0 and len(reduced_contours[0]) > 5:
+                try:
+                    ellipse = cv2.fitEllipse(reduced_contours[0])
+                    (x, y), (major_axis, minor_axis), angle = ellipse
+                    
+                    # Return center coordinates, average radius, and ellipse for visualization
+                    radius = int((major_axis + minor_axis) / 4)  # Average radius
+                    return (int(x), int(y), radius, ellipse)
+                    
+                except:
+                    return (None, None, None, None)
+            
+            return (None, None, None, None)
+            
+        except Exception as e:
+            print(f"Pupil detection error: {e}")
+            return (None, None, None, None)
+    
+    def get_darkest_area_optimized(self, image):
+        """Get darkest area with optimized ignore_bounds=60"""
+        ignore_bounds = 60  # Optimized parameter
+        image_skip_size = 20
+        search_area = 20
+        internal_skip_size = 10
         
-        return (None, None, None)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        min_sum = float('inf')
+        darkest_point = None
+
+        for y in range(ignore_bounds, gray.shape[0] - ignore_bounds, image_skip_size):
+            for x in range(ignore_bounds, gray.shape[1] - ignore_bounds, image_skip_size):
+                current_sum = 0
+                num_pixels = 0
+                for dy in range(0, search_area, internal_skip_size):
+                    if y + dy >= gray.shape[0]:
+                        break
+                    for dx in range(0, search_area, internal_skip_size):
+                        if x + dx >= gray.shape[1]:
+                            break
+                        current_sum += gray[y + dy][x + dx]
+                        num_pixels += 1
+
+                if current_sum < min_sum and num_pixels > 0:
+                    min_sum = current_sum
+                    darkest_point = (x + search_area // 2, y + search_area // 2)
+
+        return darkest_point
         
     def is_pupil_stable(self, current_radius: float) -> bool:
-        """Check if the pupil size is stable over multiple frames"""
+        """Check if the pupil size is stable over multiple frames - more robust checking"""
         if not self.last_pupil_sizes:
             self.last_pupil_sizes.append(current_radius)
             return False
-        
-        # Calculate the difference between the current and previous pupil sizes
-        diff = abs(current_radius - self.last_pupil_sizes[-1])
-        
-        # If the difference is small enough and the number of stable frames is reached
-        if diff < STABLE_THRESHOLD and len(self.last_pupil_sizes) >= STABLE_FRAMES:
-            return True
         
         # Add the current radius to the list
         self.last_pupil_sizes.append(current_radius)
@@ -338,7 +353,27 @@ class SimplePupilMeasurement:
         # Keep only the last STABLE_FRAMES elements
         if len(self.last_pupil_sizes) > STABLE_FRAMES:
             self.last_pupil_sizes.pop(0)
+        
+        # Need at least STABLE_FRAMES measurements to check stability
+        if len(self.last_pupil_sizes) < STABLE_FRAMES:
+            return False
+        
+        # Check if all recent measurements are within threshold of each other
+        recent_sizes = self.last_pupil_sizes[-STABLE_FRAMES:]
+        min_size = min(recent_sizes)
+        max_size = max(recent_sizes)
+        
+        # All measurements should be within STABLE_THRESHOLD of each other
+        if (max_size - min_size) <= STABLE_THRESHOLD:
+            # Additional check: standard deviation should be low
+            mean_size = sum(recent_sizes) / len(recent_sizes)
+            variance = sum((size - mean_size) ** 2 for size in recent_sizes) / len(recent_sizes)
+            std_dev = variance ** 0.5
             
+            # Standard deviation should be less than 1 pixel for true stability
+            if std_dev < 1.0:
+                return True
+        
         return False
 
     def run_measurement_sequence(self):
@@ -369,7 +404,7 @@ class SimplePupilMeasurement:
                 self.current_phase = "Phase 1: IR Only"
                 print("Phase 1: IR light only - measuring baseline pupil size...")
                 self.set_all_color(0, 0, 0)  # No white light
-                self.set_ir_led(50)  # 50% IR LED brightness only
+                self.set_ir_led(25)  # 75% IR LED brightness only
                 self.last_pupil_sizes = []  # Reset stability tracking
                 
                 measurement_start = time.time()
@@ -377,12 +412,11 @@ class SimplePupilMeasurement:
                 
                 while time.time() - measurement_start < 10:  # Timeout after 10 seconds
                     frame = self.camera.capture_array()
-                    x, y, radius = self.detect_pupil(frame)
+                    x, y, radius, ellipse = self.detect_pupil(frame)
                     
-                    # Add debug overlay and record frame
-                    if self.record_video:
-                        overlay_frame = self.add_debug_overlay(frame, x, y, radius)
-                        self.write_frame_to_video(overlay_frame)
+                    # Always save frame with overlay (regardless of recording setting)
+                    overlay_frame = self.add_debug_overlay(frame, x, y, radius, ellipse)
+                    self.write_frame_to_video(overlay_frame)
                     
                     if radius is not None:
                         print(f"Phase 1 - Detected pupil: position=({x}, {y}), radius={radius}")
@@ -407,38 +441,34 @@ class SimplePupilMeasurement:
                     self.stop_recording()
                     continue
                 
-                # Phase 2: Add 5% white light
-                self.current_phase = "Phase 2: Adding Light"
-                print("Phase 2: Adding 5% white light...")
-                self.set_all_color(255, 255, 255, 5)  # 5% white light
-                # Keep IR LED at 50%
+                # Phase 2: Measure pupil response with 15% white light
+                self.current_phase = "Phase 2: Measuring Response"
+                print("Phase 2: Measuring pupil response to 15% white light...")
+                self.set_all_color(255, 255, 255, 15)  # 15% white light
+                # Keep IR LED at 75%
                 self.last_pupil_sizes = []  # Reset stability tracking
                 
                 # Wait a moment for pupil to adjust
                 time.sleep(1)
                 
-                # Phase 3: Measure final pupil size
-                self.current_phase = "Phase 3: Measuring Response"
-                print("Phase 3: Measuring pupil response to light...")
                 second_measurement_start = time.time()
                 second_radius = None
                 
                 while time.time() - second_measurement_start < 10:  # 10 second timeout
                     frame = self.camera.capture_array()
-                    new_x, new_y, new_radius = self.detect_pupil(frame)
+                    new_x, new_y, new_radius, new_ellipse = self.detect_pupil(frame)
                     
-                    # Add debug overlay and record frame
-                    if self.record_video:
-                        overlay_frame = self.add_debug_overlay(frame, new_x, new_y, new_radius)
-                        self.write_frame_to_video(overlay_frame)
+                    # Always save frame with overlay (regardless of recording setting)
+                    overlay_frame = self.add_debug_overlay(frame, new_x, new_y, new_radius, new_ellipse)
+                    self.write_frame_to_video(overlay_frame)
                     
                     if new_radius is not None:
-                        print(f"Phase 3 - Detected pupil: position=({new_x}, {new_y}), radius={new_radius}")
+                        print(f"Phase 2 - Detected pupil: position=({new_x}, {new_y}), radius={new_radius}")
                         
                         if self.is_pupil_stable(new_radius):
                             second_radius = new_radius
                             self.measurement_data['response_radius'] = second_radius
-                            print(f"✓ PHASE 3 MEASUREMENT STABLE: {second_radius} pixels (with 5% white)")
+                            print(f"✓ PHASE 2 MEASUREMENT STABLE: {second_radius} pixels (with 15% white)")
                             break
                     
                     time.sleep(0.1)
@@ -514,9 +544,12 @@ class SimplePupilMeasurement:
 if __name__ == "__main__":
     print("Full Pupil Measurement System with Recording")
     print("=" * 50)
+    print("All frames will be saved for analysis")
+    print("Stability requires 15 consecutive frames with <1.5px variation")
+    print("=" * 50)
     
     try:
-        # Try with preview first, fall back to no preview if display issues
+        # Always record video and try with preview first
         pupil_system = SimplePupilMeasurement(record_video=True, show_preview=True)
         pupil_system.run_measurement_sequence()
     except Exception as e:

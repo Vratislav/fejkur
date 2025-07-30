@@ -9,50 +9,159 @@ import argparse
 from pathlib import Path
 
 class PupilTuner:
-    def __init__(self, video_files: List[str]):
+    # Parameter descriptions and reasonable ranges
+    PARAM_INFO = {
+        'clahe_clip': {
+            'description': 'Contrast Limited Adaptive Histogram Equalization clip limit. Higher values increase contrast but may amplify noise.',
+            'range': (0.5, 5.0),
+            'step': 0.5
+        },
+        'clahe_grid': {
+            'description': 'CLAHE grid size. Smaller values adapt to more local features.',
+            'range': (2, 16),
+            'step': 2
+        },
+        'bilateral_d': {
+            'description': 'Bilateral filter diameter. Larger values smooth more but are slower.',
+            'range': (5, 20),
+            'step': 1
+        },
+        'bilateral_sigma': {
+            'description': 'Bilateral filter sigma. Controls how much smoothing is applied.',
+            'range': (25, 150),
+            'step': 5
+        },
+        'thresh_block': {
+            'description': 'Adaptive threshold block size. Must be odd. Larger values use more surrounding pixels.',
+            'range': (3, 21),
+            'step': 2
+        },
+        'thresh_c': {
+            'description': 'Adaptive threshold constant. Higher values make thresholding more aggressive.',
+            'range': (-10, 10),
+            'step': 1
+        },
+        'min_area': {
+            'description': 'Minimum pupil contour area in pixels. Filters out small noise.',
+            'range': (50, 500),
+            'step': 10
+        },
+        'min_radius': {
+            'description': 'Minimum pupil radius in pixels.',
+            'range': (3, 20),
+            'step': 1
+        },
+        'iris_min_dist': {
+            'description': 'Minimum distance between detected iris circles.',
+            'range': (100, 300),
+            'step': 10
+        },
+        'iris_param1': {
+            'description': 'First Hough Circle parameter. Edge detection sensitivity.',
+            'range': (10, 100),
+            'step': 5
+        },
+        'iris_param2': {
+            'description': 'Second Hough Circle parameter. Circle detection sensitivity.',
+            'range': (10, 100),
+            'step': 5
+        },
+        'iris_min_radius': {
+            'description': 'Minimum iris radius in pixels.',
+            'range': (30, 100),
+            'step': 5
+        },
+        'iris_max_radius': {
+            'description': 'Maximum iris radius in pixels.',
+            'range': (100, 200),
+            'step': 5
+        }
+    }
+
+    def __init__(self, video_files: List[str], display: bool = True):
         self.video_files = video_files
+        self.display = display
         self.current_video_idx = 0
         self.cap = None
         
         # Detection parameters with defaults
         self.params = {
-            'clahe_clip': 2.0,        # CLAHE clip limit
-            'clahe_grid': 8,          # CLAHE grid size
-            'bilateral_d': 10,        # Bilateral filter diameter
-            'bilateral_sigma': 75,    # Bilateral filter sigma
-            'thresh_block': 11,       # Adaptive threshold block size
-            'thresh_c': 2,           # Adaptive threshold C value
-            'min_area': 100,         # Minimum pupil contour area
-            'min_radius': 5,         # Minimum pupil radius
-            'iris_min_dist': 200,    # Iris detection minimum distance
-            'iris_param1': 50,       # Iris detection param1 (edge threshold)
-            'iris_param2': 30,       # Iris detection param2 (circle threshold)
-            'iris_min_radius': 50,   # Minimum iris radius
-            'iris_max_radius': 150,  # Maximum iris radius
+            'clahe_clip': 2.0,
+            'clahe_grid': 8,
+            'bilateral_d': 10,
+            'bilateral_sigma': 75,
+            'thresh_block': 11,
+            'thresh_c': 2,
+            'min_area': 100,
+            'min_radius': 5,
+            'iris_min_dist': 200,
+            'iris_param1': 50,
+            'iris_param2': 30,
+            'iris_min_radius': 50,
+            'iris_max_radius': 150
         }
         
-        # Current parameter being adjusted
-        self.current_param = list(self.params.keys())[0]
-        self.param_step = 1
+        if display:
+            os.environ["DISPLAY"] = ":0"
+            cv2.namedWindow("Detection", cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty("Detection", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    def print_param_help(self):
+        """Print detailed help about parameters"""
+        print("\nParameter Information:")
+        print("=" * 80)
+        for param_name, info in self.PARAM_INFO.items():
+            print(f"\n{param_name}:")
+            print(f"  Description: {info['description']}")
+            print(f"  Range: {info['range']}")
+            print(f"  Step size: {info['step']}")
+            print(f"  Current value: {self.params[param_name]}")
+        print("\n" + "=" * 80)
+
+    def set_param(self, param_name: str, value: float) -> bool:
+        """Set parameter value with validation"""
+        if param_name not in self.params:
+            print(f"Error: Unknown parameter '{param_name}'")
+            return False
         
-        # Set display for Raspberry Pi
-        os.environ["DISPLAY"] = ":0"
-        cv2.namedWindow("Tuning", cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty("Tuning", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    
+        info = self.PARAM_INFO[param_name]
+        min_val, max_val = info['range']
+        
+        if value < min_val or value > max_val:
+            print(f"Warning: Value {value} for {param_name} is outside recommended range {info['range']}")
+        
+        # Special handling for parameters that must be integers
+        if param_name in ['clahe_grid', 'bilateral_d', 'thresh_block', 'min_area', 'min_radius',
+                         'iris_min_dist', 'iris_min_radius', 'iris_max_radius']:
+            value = int(value)
+            
+        # Ensure thresh_block is odd
+        if param_name == 'thresh_block':
+            value = value if value % 2 == 1 else value + 1
+        
+        self.params[param_name] = value
+        return True
+
+    def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, Dict]:
+        """Process a single frame and return visualization and measurements"""
+        # Preprocess
+        thresh, gray = self.preprocess_eye_image(frame)
+        
+        # Detect pupil
+        viz_frame, measurements = self.detect_pupil(frame.copy(), thresh, gray)
+        
+        return viz_frame, measurements
+
     def preprocess_eye_image(self, frame: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Preprocess image for better pupil detection"""
-        # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Apply CLAHE
         clahe = cv2.createCLAHE(
             clipLimit=self.params['clahe_clip'],
             tileGridSize=(self.params['clahe_grid'], self.params['clahe_grid'])
         )
         gray = clahe.apply(gray)
         
-        # Bilateral filter
         gray = cv2.bilateralFilter(
             gray,
             self.params['bilateral_d'],
@@ -60,7 +169,6 @@ class PupilTuner:
             self.params['bilateral_sigma']
         )
         
-        # Adaptive thresholding
         thresh = cv2.adaptiveThreshold(
             gray,
             255,
@@ -70,20 +178,15 @@ class PupilTuner:
             self.params['thresh_c']
         )
         
-        # Morphological operations
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
         
         return thresh, gray
-    
-    def detect_pupil(self, frame: np.ndarray) -> Tuple[np.ndarray, Dict]:
+
+    def detect_pupil(self, frame: np.ndarray, thresh: np.ndarray, gray: np.ndarray) -> Tuple[np.ndarray, Dict]:
         """Detect pupil and return visualization frame and measurements"""
-        # Make a copy for visualization
-        viz_frame = frame.copy()
-        
-        # Preprocess the image
-        thresh, gray = self.preprocess_eye_image(frame)
+        measurements = {'iris_detected': False, 'pupil_detected': False}
         
         # First detect iris
         iris_circles = cv2.HoughCircles(
@@ -97,15 +200,13 @@ class PupilTuner:
             maxRadius=self.params['iris_max_radius']
         )
         
-        measurements = {'iris_detected': False, 'pupil_detected': False}
-        
         if iris_circles is not None:
             measurements['iris_detected'] = True
             iris = np.uint16(np.around(iris_circles[0][0]))
             ix, iy, ir = iris
             
-            # Draw iris circle
-            cv2.circle(viz_frame, (ix, iy), ir, (255, 0, 0), 2)
+            if self.display:
+                cv2.circle(frame, (ix, iy), ir, (255, 0, 0), 2)
             
             # Create ROI mask for iris region
             mask = np.zeros_like(gray)
@@ -118,12 +219,10 @@ class PupilTuner:
             contours, _ = cv2.findContours(masked_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
             if contours:
-                # Find the largest contour
                 pupil_contour = max(contours, key=cv2.contourArea)
                 area = cv2.contourArea(pupil_contour)
                 
                 if area >= self.params['min_area']:
-                    # Fit circle to the contour
                     (x, y), radius = cv2.minEnclosingCircle(pupil_contour)
                     
                     if radius >= self.params['min_radius'] and radius <= ir * 0.7:
@@ -133,152 +232,114 @@ class PupilTuner:
                         measurements['pupil_radius'] = int(radius)
                         measurements['pupil_area'] = area
                         
-                        # Draw pupil contour and circle
-                        cv2.drawContours(viz_frame, [pupil_contour], -1, (0, 255, 255), 1)
-                        cv2.circle(viz_frame, (int(x), int(y)), int(radius), (0, 255, 0), 2)
+                        if self.display:
+                            cv2.drawContours(frame, [pupil_contour], -1, (0, 255, 255), 1)
+                            cv2.circle(frame, (int(x), int(y)), int(radius), (0, 255, 0), 2)
         
-        # Show the threshold image in a corner
-        h, w = frame.shape[:2]
-        small_thresh = cv2.resize(thresh, (w//4, h//4))
-        viz_frame[0:h//4, 0:w//4] = cv2.cvtColor(small_thresh, cv2.COLOR_GRAY2BGR)
+        if self.display:
+            # Show the threshold image in a corner
+            h, w = frame.shape[:2]
+            small_thresh = cv2.resize(thresh, (w//4, h//4))
+            frame[0:h//4, 0:w//4] = cv2.cvtColor(small_thresh, cv2.COLOR_GRAY2BGR)
         
-        return viz_frame, measurements
-    
-    def draw_parameter_overlay(self, frame: np.ndarray, measurements: Dict):
-        """Draw parameter values and controls on frame"""
-        h, w = frame.shape[:2]
-        overlay = np.zeros((h, w//4, 3), dtype=np.uint8)
+        return frame, measurements
+
+    def process_video(self, video_path: str, frames: int = None) -> Dict:
+        """Process video and return detection statistics"""
+        cap = cv2.VideoCapture(video_path)
+        stats = {
+            'total_frames': 0,
+            'iris_detected': 0,
+            'pupil_detected': 0,
+            'pupil_sizes': []
+        }
         
-        # Draw parameters
-        y_pos = 30
-        line_height = 25
+        try:
+            while True:
+                if frames is not None and stats['total_frames'] >= frames:
+                    break
+                    
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                viz_frame, measurements = self.process_frame(frame)
+                
+                stats['total_frames'] += 1
+                if measurements['iris_detected']:
+                    stats['iris_detected'] += 1
+                if measurements['pupil_detected']:
+                    stats['pupil_detected'] += 1
+                    stats['pupil_sizes'].append(measurements['pupil_radius'])
+                
+                if self.display:
+                    cv2.imshow("Detection", viz_frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
         
-        # Draw detection status
-        if measurements['iris_detected']:
-            cv2.putText(frame, "Iris: Detected", (w-200, y_pos),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-        else:
-            cv2.putText(frame, "Iris: Not Detected", (w-200, y_pos),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        y_pos += line_height
+        finally:
+            cap.release()
         
-        if measurements['pupil_detected']:
-            cv2.putText(frame, f"Pupil: r={measurements['pupil_radius']}", (w-200, y_pos),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        else:
-            cv2.putText(frame, "Pupil: Not Detected", (w-200, y_pos),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        y_pos += line_height * 2
+        if stats['pupil_sizes']:
+            stats['mean_pupil_size'] = np.mean(stats['pupil_sizes'])
+            stats['std_pupil_size'] = np.std(stats['pupil_sizes'])
         
-        # Draw all parameters
-        for param_name, value in self.params.items():
-            color = (0, 255, 0) if param_name == self.current_param else (200, 200, 200)
-            cv2.putText(frame, f"{param_name}: {value}", (w-200, y_pos),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-            y_pos += line_height
-        
-        # Draw controls help
-        y_pos = h - 120
-        cv2.putText(frame, "Controls:", (w-200, y_pos),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        y_pos += line_height
-        cv2.putText(frame, "UP/DOWN: Select param", (w-200, y_pos),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        y_pos += line_height
-        cv2.putText(frame, "LEFT/RIGHT: Adjust value", (w-200, y_pos),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        y_pos += line_height
-        cv2.putText(frame, "N: Next video, S: Save", (w-200, y_pos),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        
-        # Show current video name
-        video_name = Path(self.video_files[self.current_video_idx]).name
-        cv2.putText(frame, video_name, (10, h - 10),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    
-    def handle_keyboard(self) -> bool:
-        """Handle keyboard input, return False if should quit"""
-        key = cv2.waitKey(1) & 0xFF
-        
-        if key == ord('q'):
-            return False
-        elif key == ord('n'):
-            # Skip to next video
-            self.cap.release()
-            self.cap = None
-            self.current_video_idx = (self.current_video_idx + 1) % len(self.video_files)
-        elif key == ord('s'):
-            # Save current parameters
-            param_file = 'detection_params.txt'
-            with open(param_file, 'w') as f:
-                for param_name, value in self.params.items():
-                    f.write(f'{param_name}: {value}\n')
-            print(f"Parameters saved to {param_file}")
-        elif key == 82:  # Up arrow
-            # Select previous parameter
-            param_keys = list(self.params.keys())
-            current_idx = param_keys.index(self.current_param)
-            self.current_param = param_keys[(current_idx - 1) % len(param_keys)]
-        elif key == 84:  # Down arrow
-            # Select next parameter
-            param_keys = list(self.params.keys())
-            current_idx = param_keys.index(self.current_param)
-            self.current_param = param_keys[(current_idx + 1) % len(param_keys)]
-        elif key == 81:  # Left arrow
-            # Decrease current parameter
-            self.params[self.current_param] = max(0, self.params[self.current_param] - self.param_step)
-        elif key == 83:  # Right arrow
-            # Increase current parameter
-            self.params[self.current_param] += self.param_step
-        
-        return True
-    
-    def run(self):
-        """Main loop for video processing and parameter tuning"""
-        while True:
-            # Open video if not already open
-            if self.cap is None:
-                self.cap = cv2.VideoCapture(self.video_files[self.current_video_idx])
-            
-            # Read frame
-            ret, frame = self.cap.read()
-            
-            # If video ended, move to next video
-            if not ret:
-                self.cap.release()
-                self.cap = None
-                self.current_video_idx = (self.current_video_idx + 1) % len(self.video_files)
-                continue
-            
-            # Process frame
-            viz_frame, measurements = self.detect_pupil(frame)
-            
-            # Add parameter overlay
-            self.draw_parameter_overlay(viz_frame, measurements)
-            
-            # Display frame
-            cv2.imshow("Tuning", viz_frame)
-            
-            # Handle keyboard input
-            if not self.handle_keyboard():
-                break
-    
+        return stats
+
     def cleanup(self):
         """Clean up resources"""
-        if self.cap is not None:
-            self.cap.release()
-        cv2.destroyAllWindows()
+        if self.display:
+            cv2.destroyAllWindows()
 
 def main():
     parser = argparse.ArgumentParser(description="Tune pupil detection parameters")
     parser.add_argument("videos", nargs='+', help="Video files to process")
+    parser.add_argument("--no-display", action="store_true", help="Run without display")
+    parser.add_argument("--frames", type=int, help="Number of frames to process per video")
+    parser.add_argument("--param", nargs=2, action='append', metavar=('PARAM', 'VALUE'),
+                      help="Set parameter value (can be used multiple times)")
+    parser.add_argument("--list-params", action="store_true", help="List all parameters and their descriptions")
+    parser.add_argument("--save", help="Save parameters to file")
+    parser.add_argument("--load", help="Load parameters from file")
     args = parser.parse_args()
     
-    tuner = PupilTuner(args.videos)
-    try:
-        tuner.run()
-    finally:
-        tuner.cleanup()
+    tuner = PupilTuner(args.videos, display=not args.no_display)
+    
+    if args.list_params:
+        tuner.print_param_help()
+        return
+    
+    if args.load:
+        with open(args.load) as f:
+            for line in f:
+                param, value = line.strip().split(':')
+                tuner.set_param(param.strip(), float(value.strip()))
+    
+    if args.param:
+        for param_name, value in args.param:
+            tuner.set_param(param_name, float(value))
+    
+    print("\nProcessing videos with current parameters:")
+    for param_name, value in tuner.params.items():
+        print(f"{param_name}: {value}")
+    
+    for video in args.videos:
+        print(f"\nProcessing {video}...")
+        stats = tuner.process_video(video, args.frames)
+        print(f"Results:")
+        print(f"  Total frames: {stats['total_frames']}")
+        print(f"  Iris detection rate: {stats['iris_detected']/stats['total_frames']*100:.1f}%")
+        print(f"  Pupil detection rate: {stats['pupil_detected']/stats['total_frames']*100:.1f}%")
+        if 'mean_pupil_size' in stats:
+            print(f"  Mean pupil size: {stats['mean_pupil_size']:.1f} ± {stats['std_pupil_size']:.1f} pixels")
+    
+    if args.save:
+        with open(args.save, 'w') as f:
+            for param_name, value in tuner.params.items():
+                f.write(f"{param_name}: {value}\n")
+        print(f"\nParameters saved to {args.save}")
+    
+    tuner.cleanup()
 
 if __name__ == "__main__":
     main() 

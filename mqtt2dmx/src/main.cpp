@@ -3,10 +3,11 @@
 #include <WiFiS3.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
+#include <ArduinoBLE.h>
 
-// WiFi settings
-const char* ssid = "ChillNaZahrade";     // TODO: Replace with your WiFi credentials
-const char* password = "TaXfGh76";  // TODO: Replace with your WiFi password
+// WiFi credentials (will be loaded from EEPROM)
+char ssid[64] = "";
+char password[64] = "";
 
 // Web server on port 80
 WiFiServer server(80);
@@ -24,8 +25,16 @@ WiFiServer server(80);
 #define CHANNELS_PER_PRESET 11
 
 // EEPROM configuration
-#define EEPROM_ADDR 0
-#define EEPROM_MAGIC 0x444D5844 // "DMXD"
+#define EEPROM_WIFI_ADDR 0
+#define EEPROM_DEMO_ADDR 512
+#define EEPROM_WIFI_MAGIC 0x57494649 // "WIFI"
+#define EEPROM_DEMO_MAGIC 0x444D5844 // "DMXD"
+
+struct WifiConfig {
+  uint32_t magic;
+  char ssid[64];
+  char password[64];
+};
 
 struct DemoConfig {
   uint32_t magic;
@@ -57,9 +66,20 @@ uint8_t dmxData[DMX_CHANNELS] = {0};
 unsigned long lastFrameTime = 0;
 unsigned long frameCount = 0;
 
-#include "index.h"
+// BLE Service and Characteristics
+BLEService wifiConfigService("1820");  // Using a standard service UUID for better visibility
+BLEStringCharacteristic ssidCharacteristic("2ABE", BLERead | BLEWrite, 64);
+BLEStringCharacteristic passwordCharacteristic("2AC4", BLERead | BLEWrite, 64);
+bool bleConfigMode = false;
+unsigned long bleConfigStartTime = 0;
+
+// Track if both characteristics have been written
+bool ssidWritten = false;
+bool passwordWritten = false;
 
 // Function declarations
+void saveWifiConfig(String newSsid, String newPassword);
+void loadWifiConfig();
 void setDMXChannel(uint16_t channel, uint8_t value);
 void sendDMXBreak();
 void sendDMXFrame();
@@ -68,6 +88,30 @@ void handleWebRequest(WiFiClient client);
 void saveDemoToEEPROM();
 void clearDemoFromEEPROM();
 void loadDemoFromEEPROM();
+void printBLEInfo();
+
+// Forward declare the BLE handlers
+void onSsidCharacteristicWritten(BLEDevice central, BLECharacteristic characteristic);
+void onPasswordCharacteristicWritten(BLEDevice central, BLECharacteristic characteristic);
+
+// Include the web interface
+#include "index.h"
+
+// Function implementations
+void saveWifiConfig(String newSsid, String newPassword) {
+  WifiConfig config;
+  config.magic = EEPROM_WIFI_MAGIC;
+  strncpy(config.ssid, newSsid.c_str(), sizeof(config.ssid) - 1);
+  strncpy(config.password, newPassword.c_str(), sizeof(config.password) - 1);
+  config.ssid[sizeof(config.ssid) - 1] = '\0';
+  config.password[sizeof(config.password) - 1] = '\0';
+
+  Serial.println("Saving WiFi config to EEPROM...");
+  EEPROM.put(EEPROM_WIFI_ADDR, config);
+  Serial.println("WiFi config saved. Rebooting in 3 seconds...");
+  delay(3000);
+  NVIC_SystemReset();
+}
 
 // Set DMX channel value
 void setDMXChannel(uint16_t channel, uint8_t value) {
@@ -230,29 +274,29 @@ void processDemo() {
 
 void saveDemoToEEPROM() {
   DemoConfig config;
-  config.magic = EEPROM_MAGIC;
+  config.magic = EEPROM_DEMO_MAGIC;
   config.numPresets = numStoredPresets;
   config.moveDelay = demoMoveDelay;
   config.holdTime = demoHoldTime;
   memcpy(config.presets, storedPresets, sizeof(storedPresets));
 
   Serial.println("Saving demo to EEPROM...");
-  EEPROM.put(EEPROM_ADDR, config);
+  EEPROM.put(EEPROM_DEMO_ADDR, config);
   Serial.println("Save complete.");
 }
 
 void clearDemoFromEEPROM() {
   Serial.println("Clearing demo from EEPROM...");
   uint32_t magic = 0; // Invalidate the magic number
-  EEPROM.put(EEPROM_ADDR, magic);
+  EEPROM.put(EEPROM_DEMO_ADDR, magic);
   Serial.println("EEPROM cleared.");
 }
 
 void loadDemoFromEEPROM() {
   DemoConfig config;
-  EEPROM.get(EEPROM_ADDR, config);
+  EEPROM.get(EEPROM_DEMO_ADDR, config);
 
-  if (config.magic == EEPROM_MAGIC) {
+  if (config.magic == EEPROM_DEMO_MAGIC) {
     Serial.println("Found valid demo in EEPROM. Starting automatically.");
     numStoredPresets = config.numPresets;
     demoMoveDelay = config.moveDelay;
@@ -265,6 +309,22 @@ void loadDemoFromEEPROM() {
     demoMode = true;
   } else {
     Serial.println("No valid demo found in EEPROM.");
+  }
+}
+
+void loadWifiConfig() {
+  WifiConfig config;
+  EEPROM.get(EEPROM_WIFI_ADDR, config);
+
+  if (config.magic == EEPROM_WIFI_MAGIC) {
+    strncpy(ssid, config.ssid, sizeof(ssid) - 1);
+    strncpy(password, config.password, sizeof(password) - 1);
+    ssid[sizeof(ssid) - 1] = '\0';
+    password[sizeof(password) - 1] = '\0';
+    Serial.println("Loaded WiFi config from EEPROM.");
+  } else {
+    Serial.println("No valid WiFi config found in EEPROM. Entering BLE config mode.");
+    bleConfigMode = true;
   }
 }
 
@@ -472,11 +532,108 @@ void handleWebRequest(WiFiClient client) {
     client.stop();
 }
 
+void printBLEInfo() {
+    Serial.println("\n=== BLE Configuration ===");
+    Serial.print("Device MAC: ");
+    Serial.println(BLE.address());
+    Serial.println("Service UUID: 180F");
+    Serial.println("SSID Characteristic UUID: 2A19");
+    Serial.println("Password Characteristic UUID: 2A20");
+    Serial.println("=======================\n");
+}
+
+// BLE characteristic handlers (defined after all functions they use)
+void onSsidCharacteristicWritten(BLEDevice central, BLECharacteristic characteristic) {
+    Serial.print("SSID Characteristic Written: ");
+    Serial.println(ssidCharacteristic.value());
+    ssidWritten = true;
+    
+    // If both have been written, save the config
+    if (ssidWritten && passwordWritten) {
+        Serial.println("Both credentials received, saving...");
+        saveWifiConfig(ssidCharacteristic.value(), passwordCharacteristic.value());
+    }
+}
+
+void onPasswordCharacteristicWritten(BLEDevice central, BLECharacteristic characteristic) {
+    Serial.print("Password Characteristic Written: ");
+    Serial.println(passwordCharacteristic.value());
+    passwordWritten = true;
+    
+    // If both have been written, save the config
+    if (ssidWritten && passwordWritten) {
+        Serial.println("Both credentials received, saving...");
+        saveWifiConfig(ssidCharacteristic.value(), passwordCharacteristic.value());
+    }
+}
+
 void setup() {
-    // Initialize Serial for debugging
     Serial.begin(115200);
     while (!Serial) delay(10);
     Serial.println("Arduino R4 DMX Web Controller");
+
+    loadWifiConfig();
+
+    if (!BLE.begin()) {
+        Serial.println("Starting BLE failed!");
+        while (1);
+    }
+
+    // Set a more visible device name
+    BLE.setDeviceName("DMX Config");
+    BLE.setLocalName("DMX Config");
+    
+    // Set up the BLE service
+    wifiConfigService.addCharacteristic(ssidCharacteristic);
+    wifiConfigService.addCharacteristic(passwordCharacteristic);
+    
+    // Set up write handlers
+    ssidCharacteristic.setEventHandler(BLEWritten, onSsidCharacteristicWritten);
+    passwordCharacteristic.setEventHandler(BLEWritten, onPasswordCharacteristicWritten);
+    
+    BLE.addService(wifiConfigService);
+
+    // Set initial values
+    ssidCharacteristic.writeValue("Enter SSID");
+    passwordCharacteristic.writeValue("Enter Password");
+
+    // Reset written flags
+    ssidWritten = false;
+    passwordWritten = false;
+
+    // Set up advertising data
+    BLE.setAdvertisedService(wifiConfigService);
+    
+    // Start advertising with higher power for better range
+    BLE.setConnectable(true);
+    BLE.setAdvertisingInterval(100);
+    BLE.advertise();
+    
+    // Print all BLE information
+    printBLEInfo();
+    Serial.println("BLE advertising started. Look for 'DMX Config' device.");
+
+    if (bleConfigMode) {
+        // Stay in config mode until credentials are provided
+        while (bleConfigMode) {
+            BLE.poll();
+        }
+    } else {
+        bleConfigStartTime = millis();
+        // Initialize WiFi
+        WiFi.begin(ssid, password);
+        Serial.print("Connecting to WiFi");
+        while (WiFi.status() != WL_CONNECTED) {
+            delay(500);
+            Serial.print(".");
+        }
+        Serial.println();
+        Serial.print("IP address: ");
+        Serial.println(WiFi.localIP());
+        
+        // Start web server
+        server.begin();
+    }
     
     // Initialize DMX
     pinMode(DMX_DE_PIN, OUTPUT);
@@ -487,27 +644,17 @@ void setup() {
     setDMXChannel(2, 128);  // Pan Fine = 128
     setDMXChannel(4, 128);  // Tilt Fine = 128
     
-    // Initialize WiFi
-    WiFi.begin(ssid, password);
-    Serial.print("Connecting to WiFi");
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-    Serial.println();
-    
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-    
-    // Start web server
-    server.begin();
-    
     Serial.println("System ready!");
 
     loadDemoFromEEPROM(); // Load and auto-start if present
 }
 
 void loop() {
+    // Always poll BLE in the first 60 seconds
+    if (!bleConfigMode && millis() - bleConfigStartTime < 60000) {
+        BLE.poll();
+    }
+
     // Continue sending DMX frames at 40Hz
     unsigned long currentTime = micros();
     if (currentTime - lastFrameTime >= DMX_FRAME_TIME) {

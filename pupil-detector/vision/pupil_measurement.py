@@ -10,6 +10,10 @@ from picamera2 import Picamera2
 import RPi.GPIO as GPIO
 from rpi_ws281x import PixelStrip, Color
 
+# Force local display on Pi (not SSH forwarded)
+os.environ.pop('DISPLAY', None)  # Remove SSH forwarded display
+os.environ.pop('SSH_CLIENT', None)  # Remove SSH indicators
+
 # Constants
 LED_COUNT = 12        # Number of LED pixels
 LED_PIN = 18         # GPIO pin connected to the pixels (must support PWM)
@@ -20,6 +24,8 @@ LED_CHANNEL = 0      # PWM channel
 LED_INVERT = False   # True to invert the signal
 
 PROXIMITY_PIN = 4    # GPIO pin for proximity sensor
+IR_LED_PIN = 13     # GPIO pin for IR LED (PWM1)
+IR_LED_FREQ = 100   # PWM frequency for IR LED
 STABLE_THRESHOLD = 2.0  # Maximum allowed pupil size variation to consider stable (in pixels)
 STABLE_FRAMES = 10   # Number of frames pupil size must be stable for
 
@@ -28,27 +34,38 @@ class PupilMeasurement:
         self.debug = debug
         self.setup_camera()
         self.setup_proximity_sensor()
+        self.setup_ir_led()
         self.setup_leds()
         self.last_pupil_sizes = []
         
     def setup_camera(self):
         """Initialize camera and window if in debug mode"""
         self.camera = Picamera2()
-        preview_config = self.camera.create_preview_configuration(
-            main={"size": (640, 480)},
-            lores={"size": (320, 240), "format": "YUV420"})
+        
+        # Use the exact same configuration as our working test script
+        preview_config = self.camera.create_preview_configuration(main={"size": (640, 480)})
         self.camera.configure(preview_config)
-        self.camera.start()
         
         if self.debug:
-            os.environ["DISPLAY"] = ":0"
-            cv2.namedWindow("Pupil Detection", cv2.WINDOW_NORMAL)
-            cv2.setWindowProperty("Pupil Detection", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            # Use the exact method that worked in our test
+            self.camera.start(show_preview=True)
+        else:
+            self.camera.start()
     
     def setup_proximity_sensor(self):
         """Initialize proximity sensor with internal pull-up"""
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(PROXIMITY_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    
+    def setup_ir_led(self):
+        """Initialize IR LED with PWM"""
+        GPIO.setup(IR_LED_PIN, GPIO.OUT)
+        self.ir_pwm = GPIO.PWM(IR_LED_PIN, IR_LED_FREQ)
+        self.ir_pwm.start(0)  # Start with LED off
+    
+    def set_ir_led(self, duty_cycle: float):
+        """Set IR LED brightness (0-100)"""
+        self.ir_pwm.ChangeDutyCycle(duty_cycle)
     
     def setup_leds(self):
         """Initialize NeoPixel strip"""
@@ -64,64 +81,45 @@ class PupilMeasurement:
             self.strip.setPixelColor(i, color)
             self.strip.setBrightness(brightness)
         self.strip.show()
-    
-    def detect_pupil(self, frame) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        """Detect pupil in frame, return (x, y, radius) or (None, None, None)"""
+
+    def detect_pupil(self, frame: np.ndarray) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+        """Detect pupil in the frame using OpenCV"""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+        gray = cv2.GaussianBlur(gray, (11, 11), 0)
         
-        # First detect iris (larger circle)
-        iris_circles = cv2.HoughCircles(
-            blurred,
-            cv2.HOUGH_GRADIENT,
-            dp=1,
-            minDist=200,
-            param1=50,
-            param2=30,
-            minRadius=50,
-            maxRadius=150
-        )
+        # Use HoughCircles to find circles (potential pupils)
+        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1.2, 100, param1=50, param2=30, minRadius=10, maxRadius=50)
         
-        if iris_circles is None:
-            return None, None, None
+        if circles is not None:
+            circles = np.round(circles[0, :]).astype("int")
+            for (x, y, r) in circles:
+                # Check if the circle is within the frame boundaries
+                if x - r > 0 and x + r < frame.shape[1] and y - r > 0 and y + r < frame.shape[0]:
+                    return (x, y, r)
+        return (None, None, None)
+
+    def is_pupil_stable(self, current_radius: float) -> bool:
+        """Check if the pupil size is stable over multiple frames"""
+        if not self.last_pupil_sizes:
+            self.last_pupil_sizes.append(current_radius)
+            return False
         
-        # Get the largest circle (iris)
-        iris = np.uint16(np.around(iris_circles[0][0]))
-        ix, iy, ir = iris
+        # Calculate the difference between the current and previous pupil sizes
+        diff = abs(current_radius - self.last_pupil_sizes[-1])
         
-        # Create mask for iris region
-        mask = np.zeros_like(gray)
-        cv2.circle(mask, (ix, iy), ir, 255, -1)
-        masked = cv2.bitwise_and(gray, gray, mask=mask)
+        # If the difference is small enough and the number of stable frames is reached
+        if diff < STABLE_THRESHOLD and len(self.last_pupil_sizes) >= STABLE_FRAMES:
+            return True
         
-        # Detect pupil within iris
-        pupil_circles = cv2.HoughCircles(
-            masked,
-            cv2.HOUGH_GRADIENT,
-            dp=1,
-            minDist=20,
-            param1=50,
-            param2=25,
-            minRadius=20,
-            maxRadius=int(ir * 0.7)  # Pupil should be smaller than iris
-        )
+        # Add the current radius to the list
+        self.last_pupil_sizes.append(current_radius)
         
-        if pupil_circles is None:
-            return None, None, None
-            
-        pupil = np.uint16(np.around(pupil_circles[0][0]))
-        return pupil[0], pupil[1], pupil[2]
-    
-    def is_pupil_stable(self, radius: int) -> bool:
-        """Check if pupil size has been stable for the required number of frames"""
-        self.last_pupil_sizes.append(radius)
+        # Keep only the last STABLE_FRAMES elements
         if len(self.last_pupil_sizes) > STABLE_FRAMES:
             self.last_pupil_sizes.pop(0)
-            if len(self.last_pupil_sizes) == STABLE_FRAMES:
-                variation = np.std(self.last_pupil_sizes)
-                return variation < STABLE_THRESHOLD
+            
         return False
-    
+
     def run_measurement_sequence(self):
         """Run the complete measurement sequence"""
         try:
@@ -129,12 +127,14 @@ class PupilMeasurement:
                 # Wait for proximity trigger
                 if GPIO.input(PROXIMITY_PIN):  # Active low
                     self.set_all_color(0, 0, 0)  # LEDs off
+                    self.set_ir_led(0)  # IR LED off
                     time.sleep(0.1)
                     continue
                 
                 # Object detected - start measurement sequence
                 print("Object detected - starting measurement")
                 self.set_all_color(255, 255, 255, 5)  # 5% white
+                self.set_ir_led(50)  # 50% IR LED brightness
                 self.last_pupil_sizes = []  # Reset stability tracking
                 
                 measurement_start = time.time()
@@ -143,11 +143,8 @@ class PupilMeasurement:
                     x, y, radius = self.detect_pupil(frame)
                     
                     if radius is not None:
-                        # Draw detection visualization if in debug mode
                         if self.debug:
-                            cv2.circle(frame, (x, y), radius, (0, 255, 0), 2)
-                            cv2.putText(frame, f"Pupil size: {radius}", (10, 30),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                            print(f"Detected pupil at ({x}, {y}) with radius {radius}")
                         
                         if self.is_pupil_stable(radius):
                             print(f"Pupil stable at size {radius}")
@@ -171,14 +168,7 @@ class PupilMeasurement:
                                 new_x, new_y, new_radius = self.detect_pupil(frame)
                                 
                                 if new_radius is not None and self.debug:
-                                    cv2.circle(frame, (new_x, new_y), new_radius, (0, 255, 0), 2)
-                                    cv2.putText(frame, f"New size: {new_radius}", (10, 60),
-                                              cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                                
-                                if self.debug:
-                                    cv2.imshow("Pupil Detection", frame)
-                                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                                        return
+                                    print(f"Second measurement: pupil at ({new_x}, {new_y}) with radius {new_radius}")
                                 
                                 if new_radius is not None and self.is_pupil_stable(new_radius):
                                     print(f"Second measurement stable at {new_radius}")
@@ -189,12 +179,8 @@ class PupilMeasurement:
                             
                             # Reset for next measurement
                             self.set_all_color(0, 0, 0)
+                            self.set_ir_led(0)  # Turn off IR LED
                             break
-                    
-                    if self.debug:
-                        cv2.imshow("Pupil Detection", frame)
-                        if cv2.waitKey(1) & 0xFF == ord('q'):
-                            return
                 
                 time.sleep(0.1)  # Small delay to prevent busy waiting
                 
@@ -205,19 +191,15 @@ class PupilMeasurement:
     
     def cleanup(self):
         """Clean up resources"""
-        if self.debug:
-            cv2.destroyAllWindows()
         self.camera.stop()
+        self.ir_pwm.stop()  # Stop PWM for IR LED
         GPIO.cleanup()
         self.set_all_color(0, 0, 0)
 
-def main():
-    parser = argparse.ArgumentParser(description="Pupil measurement with proximity trigger and LED feedback")
-    parser.add_argument("--debug", action="store_true", help="Enable debug visualization")
-    args = parser.parse_args()
-    
-    measurement = PupilMeasurement(debug=args.debug)
-    measurement.run_measurement_sequence()
-
 if __name__ == "__main__":
-    main() 
+    parser = argparse.ArgumentParser(description="Pupil Measurement System")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode (camera window)")
+    args = parser.parse_args()
+
+    pupil_measurement = PupilMeasurement(debug=args.debug)
+    pupil_measurement.run_measurement_sequence() 

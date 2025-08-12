@@ -28,3 +28,56 @@ The basic game mechanic is:
 
 - There could be multiple players in the room.
 - The wardrobe doors can be left opened. If this happens, the first task is to close the doors. (this task does not count towards the chance of the AI dropping the final gesture to escape the room)
+
+
+## The Processing Loop
+
+- The processing loop runs every 15 seconds
+- It grabs a frame from the camera
+- It detects humans in the frame (use server api to detect humans from humanDetection.ts)
+   -- If human is not detected for 2 minutes straight, the game resets to IDLE state.
+   -- If in IDLE state and human is detected, the game starts in STARTING state.
+- If there is a human in the frame, it sends it to the LLM to process.
+   - LLM Processing
+      - Gameplay update
+         - Checks whether it should move to the next state
+         - Check whether another human has joined. Every human that joins is added to the game state. 
+         - Checks for humans performing tasks (urging to do it, checking if it is done)
+         - increase chance of dropping a hint
+      - Narration update
+         - It narrates in the following priority:
+            - Human that newly joined
+            - Dropping a hint
+            - Human that is performing a task
+            - Commenting
+
+## The Game States
+- IDLE (No human in the room)
+- STARTING (Human is in the room, wardrobe doors are opened) - AI is urging the player to close the doors (special type of task)
+- STARTED (Human is in the room, wardrobe doors are closed) - AI describes the player and welcomes him
+- PLAYING - AI is narating and giving tasks, also can drop a hint
+   - Active task
+   - No active task
+- ESCAPED - IF User signed the final gesture and leaves the room, the AI narrates that
+- ENDED - The game has ended because the human has left the room
+
+# Narration
+- In the style of Stanley Parable
+- Omniscient, second-person: A calm, storybook-like British voice describes what players are doing and “should” do.
+- Meta and self-referential: Constantly breaks the fourth wall, commenting on game design, choice, endings, and the act of narration itself.
+- Unreliable yet authoritative: Sounds certain even when wrong, retconning or pivoting as the player derails the “story.”
+- Counterfactual narration: Sometimes narrates future or hypothetical actions, daring the player to test or contradict it.
+- Tone shifts with agency: From cozy and indulgent to sardonic, pleading, or ominous depending on how stubborn the player is.
+- Reset-aware: Acknowledges loops and endings; uses repetition and variation to make restarts part of the story.
+- Theme-forward: Centers on choice vs. determinism, authorship vs. agency, and the tension between player and narrator.
+- Voice: Wry, measured, storybook British.
+- Mechanic: Prescribe → observe → adapt.
+- Flavor: Meta, comedic, fourth-wall breaking.
+- Focus: Player agency as a dialogue with the narrator.
+
+# Tech details
+- Implemented as a state machine / game service in Typescript / Node.js
+- Use cameraUtils for grabbing frames from the camera
+- Use humanDetection for detecting humans in the frame
+- Use ILLM for interfacing with the LLM
+- Use INarrator for narrating

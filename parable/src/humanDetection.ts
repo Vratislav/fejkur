@@ -1,9 +1,7 @@
 import path from "path";
 import { spawn } from "child_process";
 import { promises as fs } from "fs";
-import http from "http";
-import https from "https";
-import { URL } from "url";
+import axios from "axios";
 
 export type HumanDetectionResult = {
   humansDetected: boolean;
@@ -121,48 +119,6 @@ async function readLabelFileContentForSource(
   }
 }
 
-async function postJson<T>(urlString: string, body: unknown): Promise<T> {
-  const urlObj = new URL(urlString);
-  const isHttps = urlObj.protocol === "https:";
-  const transport = isHttps ? https : http;
-
-  const json = JSON.stringify(body);
-  const options: http.RequestOptions = {
-    method: "POST",
-    hostname: urlObj.hostname,
-    port: urlObj.port ? Number(urlObj.port) : isHttps ? 443 : 80,
-    path: urlObj.pathname + urlObj.search,
-    headers: {
-      "content-type": "application/json",
-      "content-length": Buffer.byteLength(json).toString(),
-    },
-  };
-
-  return await new Promise<T>((resolve, reject) => {
-    const req = transport.request(options, (res) => {
-      const chunks: Buffer[] = [];
-      res.on("data", (d) =>
-        chunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d))
-      );
-      res.on("end", () => {
-        const text = Buffer.concat(chunks).toString("utf8");
-        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-          try {
-            resolve(JSON.parse(text) as T);
-          } catch (err) {
-            reject(err);
-          }
-        } else {
-          reject(new Error(`HTTP ${res.statusCode}: ${text}`));
-        }
-      });
-    });
-    req.on("error", reject);
-    req.write(json);
-    req.end();
-  });
-}
-
 async function detectViaServer(
   absSourcePath: string,
   options?: HumanDetectionOptions
@@ -176,13 +132,13 @@ async function detectViaServer(
     humansDetected: boolean;
     humansCount: number;
   };
-  const res = await postJson<Response>(serverUrl, {
+  const { data } = await axios.post<Response>(serverUrl, {
     source_path: absSourcePath,
     conf,
     save_txt: true,
     save_conf: true,
   });
-  return { humansDetected: res.humansDetected, humansCount: res.humansCount };
+  return { humansDetected: data.humansDetected, humansCount: data.humansCount };
 }
 
 export async function detectHumans(

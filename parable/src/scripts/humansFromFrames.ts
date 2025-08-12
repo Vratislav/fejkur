@@ -34,7 +34,7 @@ async function main(): Promise<void> {
   for (const framePath of framePaths) {
     const frameStartMs = Date.now();
     try {
-      const result = await detectHumans(framePath);
+      const result = await detectHumans(framePath, { useServer: true });
       console.log(`${framePath} humans=${result.humansCount}`);
     } catch (err: any) {
       console.error(`${framePath} error=${err?.message || String(err)}`);

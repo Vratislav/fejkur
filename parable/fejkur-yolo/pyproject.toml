@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "fejkur"
+version = "0.1.0"
+description = ""
+authors = ["Vratislav Kalenda <v.kalenda@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+ultralytics = "^8.3.177"
+fastapi = "^0.116.1"
+uvicorn = "^0.35.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

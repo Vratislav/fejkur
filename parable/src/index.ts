@@ -30,9 +30,12 @@ function getRtspUrlFromEnv() {
 async function main() {
   try {
     console.log("Starting camera frame capture...");
-
-    const framePath = await grabFrame(getRtspUrlFromEnv());
-    console.log(`Frame captured successfully and saved to: ${framePath}`);
+    //Grab frame every 10 seconds
+    while (true) {
+      const framePath = await grabFrame(getRtspUrlFromEnv());
+      console.log(`Frame captured successfully and saved to: ${framePath}`);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
   } catch (error) {
     console.error("Failed to capture frame:", error);
     process.exit(1);

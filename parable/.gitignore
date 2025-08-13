@@ -1,5 +1,6 @@
 #Custom
 frames/
+frames_backup/
 # Dependencies
 node_modules/
 npm-debug.log*

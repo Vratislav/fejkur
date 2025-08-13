@@ -3,7 +3,7 @@ import { playerIdentificationFlow } from "../ai/flows/playerIdentificationFlow";
 import { HumanDetectionResult } from "../humanDetection";
 import { INarrator } from "../INarrator";
 import { ILLM } from "../lLLM";
-import { ICameraFrameProvider } from "./ICameraFrameProvider";
+import { Frame, ICameraFrameProvider } from "./ICameraFrameProvider";
 import { IHumanDetector } from "./IHumanDetector";
 
 export interface GameEngineOpts {
@@ -65,18 +65,32 @@ export class GameEngine {
 
   async doTick() {
     const processTickStart = Date.now();
-    const frame = await this.frameProvider.getLatestFrame();
-    if (Date.now() - frame.timestamp > this.opts.maxFrameStalenessMs) {
-      console.log(`Frame is stale, skipping: ${frame.path}`);
+
+    let frame: Frame | undefined = undefined;
+    try {
+      frame = await this.frameProvider.getLatestFrame();
+    } catch (e) {
+      console.log("Error getting frame: ", e);
       return;
     }
-    //Run the human detection
-    const humanDetectionResult = await this.humanDetector.detectHumans(
-      frame.path
-    );
-    console.log(`Humans: ${humanDetectionResult.humansCount}`);
-    await this.checkForHumanStalenessAndResetGame(humanDetectionResult);
-    await this.doGameTick(frame.path, humanDetectionResult);
+    if (frame) {
+      if (Date.now() - frame.timestamp > this.opts.maxFrameStalenessMs) {
+        console.log(`Frame is stale, skipping: ${frame.path}`);
+        return;
+      }
+      try {
+        //Run the human detection
+        const humanDetectionResult = await this.humanDetector.detectHumans(
+          frame.path
+        );
+        console.log(`Humans: ${humanDetectionResult.humansCount}`);
+        await this.checkForHumanStalenessAndResetGame(humanDetectionResult);
+        await this.doGameTick(frame.path, humanDetectionResult);
+      } catch (e) {
+        console.log("Error in GameEngine.doTick(): ", e);
+      }
+    }
+
     const processTickEnd = Date.now();
     const processTickDuration = processTickEnd - processTickStart;
     console.log(`Tick took ${processTickDuration}ms`);

@@ -1,0 +1,18 @@
+{
+  "id": "hug-bear",
+  "title": "Hug the teddy bear",
+  "description": "Find the teddy bear and give it a nice hug.",
+  "isGroupTask": false,
+  "maxAsks": 4,
+  "condition": {
+    "type": "vision_llm",
+    "prompt": "Does the person in the image appear to be hugging a teddy bear? Answer with JSON {\"taskCompleted\": boolean}."
+  },
+  "hints": [
+    "You know, the fuzzy confidant sitting all alone.",
+    "It's not going to hug itself.",
+    "Go on, you need the emotional support more than it does."
+  ]
+}
+
+

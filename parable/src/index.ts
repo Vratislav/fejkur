@@ -1,5 +1,8 @@
-import { grabFrame, createRtspUrl } from "./cameraUtils";
+import { createRtspUrl } from "./cameraUtils";
 import dotenv from "dotenv";
+import { GameEngine } from "./game/inspo/GameEngine";
+import { ConsoleNarrator } from "./game/inspo/NarratorConsole";
+import { StubLLM } from "./game/inspo/LLMStub";
 
 // Load environment variables
 dotenv.config();
@@ -29,13 +32,16 @@ function getRtspUrlFromEnv() {
 
 async function main() {
   try {
-    console.log("Starting camera frame capture...");
-    //Grab frame every 10 seconds
-    while (true) {
-      const framePath = await grabFrame(getRtspUrlFromEnv());
-      console.log(`Frame captured successfully and saved to: ${framePath}`);
-      await new Promise((resolve) => setTimeout(resolve, 1));
-    }
+    console.log("Starting game engine...");
+    const narrator = new ConsoleNarrator();
+    const llm = new StubLLM();
+    const engine = new GameEngine({
+      narrator,
+      llm,
+      config: { tickMs: 15000, yoloUseServer: true },
+      getRtspUrl: getRtspUrlFromEnv,
+    });
+    await engine.start();
   } catch (error) {
     console.error("Failed to capture frame:", error);
     process.exit(1);

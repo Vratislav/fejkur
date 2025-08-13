@@ -21,7 +21,10 @@ export const playerIdentificationSchema = z.object({
 
 export type PlayerIdentification = typeof playerIdentificationSchema._type;
 
-const playerIdentificationPrompt = (players: any) => `
+const playerIdentificationPrompt = (
+  players: any,
+  narrationHistory: string[]
+) => `
 You are a Stanley Parable style narrator. You should describe what the humans in the room are doing.
 When new human enters the room, you should first describe their appearance.
 After that you can describe their activity.
@@ -40,6 +43,9 @@ Example: "An young man with short brown hair and blue shirt enters the room. He 
 
 This is the currently detected humans:
 ${JSON.stringify(players)}
+
+This is the history of the narration:
+${narrationHistory.join("\n\n")}
 "
 `;
 
@@ -53,6 +59,7 @@ export const narrationFlow = ai.defineFlow(
 
     inputSchema: z.object({
       framePath: z.string(),
+      narrationHistory: z.array(z.string()),
       players: z.array(
         z.object({
           appearance: z.string(),
@@ -69,7 +76,7 @@ export const narrationFlow = ai.defineFlow(
     console.log("narration flow -> ");
     const frame = await frameToLLMInput(input.framePath);
     const response = await ai.generate({
-      system: playerIdentificationPrompt(input.players),
+      system: playerIdentificationPrompt(input.players, input.narrationHistory),
       prompt: [frame],
       output: { schema: outputSchema },
     });

@@ -3,6 +3,7 @@ import { readFile } from "fs/promises";
 import { genkit, z } from "genkit";
 import { text } from "stream/consumers";
 import { frameToLLMInput } from "./ai";
+import { PlayerInformation } from "../../game/GameEngine";
 
 // Initialize Genkit with the Google AI plugin
 const ai = genkit({
@@ -13,6 +14,7 @@ const ai = genkit({
 });
 
 export const playerIdentificationSchema = z.object({
+  id: z.number().optional(),
   appearance: z.string(),
   activity: z.string(),
   gender: z.enum(["male", "female"]),
@@ -21,8 +23,12 @@ export const playerIdentificationSchema = z.object({
 
 export type PlayerIdentification = typeof playerIdentificationSchema._type;
 
-const playerIdentificationPrompt = `
-Describe the players in the room. 
+const playerIdentificationPrompt = (players: any[]) => `
+${
+  players.length > 0
+    ? "Update the players in the room. Only update their activity and what they are holding in their hands. Return back the same ids as received."
+    : "Describe the players in the room. "
+}
 
 Identify their appearance.
 - What are they wearing?
@@ -48,6 +54,12 @@ Example holding when nothing is in their hands: ""
 Describe their gender.
 Example gender: "female"
 
+${
+  players.length > 0
+    ? `Current players: 
+${JSON.stringify(players)}`
+    : ""
+}
 `;
 
 const outputSchema = z.array(playerIdentificationSchema);
@@ -58,14 +70,18 @@ export const playerIdentificationFlow = ai.defineFlow(
 
     inputSchema: z.object({
       framePath: z.string(),
+      players: z.array(z.any()),
     }),
     outputSchema: outputSchema,
   },
   async (input) => {
     console.log("playerIdentificationFlow -> ", input.framePath);
+    const systemPrompt = playerIdentificationPrompt(input.players);
+    // console.log("System Prompt:");
+    // console.log(systemPrompt);
     const frame = await frameToLLMInput(input.framePath);
     const response = await ai.generate({
-      system: playerIdentificationPrompt,
+      system: systemPrompt,
       prompt: [frame],
       docs: [],
       output: { schema: outputSchema },

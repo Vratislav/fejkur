@@ -18,6 +18,7 @@ export interface GameEngineOpts {
 }
 
 export interface PlayerInformation {
+  id: number;
   appearance: string;
   activity: string;
   holdingInHands?: string;
@@ -43,6 +44,7 @@ export class GameEngine {
   amountOfTicksWithHuman: number = 0;
   dropHintChance: number = 0.0;
   intervalHandle?: NodeJS.Timeout;
+  narrationHistory: string[] = [];
   players: PlayerInformation[] = [];
   state: GameEngineState = GameEngineState.IDLE;
 
@@ -135,29 +137,39 @@ export class GameEngine {
     }
   }
 
-  private async identifyPlayers(frame: string): Promise<PlayerInformation[]> {
+  private async identifyPlayers(
+    frame: string,
+    currentPlayers: PlayerInformation[]
+  ): Promise<PlayerInformation[]> {
     const playersFromLLM = await playerIdentificationFlow({
       framePath: frame,
+      players: currentPlayers,
     });
-
+    let runningPlayerId = 1;
     return playersFromLLM.map((player): PlayerInformation => {
-      return {
+      const toReturn = {
+        id: player.id ?? runningPlayerId,
         ...player,
         holdingInHands: player.holdingInHands || undefined,
       };
+      runningPlayerId++;
+      return toReturn;
     });
   }
 
   async doPlayingGameTick(frame: string, detection: HumanDetectionResult) {
+    this.players = await this.identifyPlayers(frame, this.players);
     const narration = await narrationFlow({
       framePath: frame,
       players: this.players,
+      narrationHistory: this.narrationHistory,
     });
+    this.narrationHistory.push(narration.narration);
     this.narrator.narrate(narration.narration);
   }
 
   async doStartedGameTick(frame: string, detection: HumanDetectionResult) {
-    this.players = await this.identifyPlayers(frame);
+    this.players = await this.identifyPlayers(frame, this.players);
 
     if (this.players.length > 0) {
       console.log("Players identified:");
@@ -165,7 +177,9 @@ export class GameEngine {
       const narration = await narrationFlow({
         framePath: frame,
         players: this.players,
+        narrationHistory: this.narrationHistory,
       });
+      this.narrationHistory.push(narration.narration);
       this.narrator.narrate(narration.narration);
       this.transitionToState(GameEngineState.PLAYING);
     }

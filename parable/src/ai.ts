@@ -15,7 +15,7 @@ export const playerIdentificationSchema = z.object({
   appareance: z.string(),
   activity: z.string(),
   gender: z.enum(["male", "female"]),
-  holdingInHands: z.string().optional(),
+  holdingInHands: z.string(),
 });
 
 export type PlayerIdentification = typeof playerIdentificationSchema._type;
@@ -42,30 +42,35 @@ Describe what they are holding in their hands.
 - What are they holding?
 
 Example holding: "The man is holding a blue book."
-Example holding when nothing is in their hands: undefined
+Example holding when nothing is in their hands: ""
 
 Describe their gender.
 Example gender: "female"
 
 `;
 
-export const recipeGeneratorFlow = ai.defineFlow(
+const outputSchema = z.array(playerIdentificationSchema);
+
+export const playerIdentificationFlow = ai.defineFlow(
   {
     name: "playerIdentificationFlow",
 
     inputSchema: z.object({
       framePath: z.string(),
     }),
-    outputSchema: z.array(playerIdentificationSchema),
+    outputSchema: outputSchema,
   },
   async (input) => {
+    console.log("playerIdentificationFlow -> ", input.framePath);
     const frame = await frameToLLMInput(input.framePath);
     const response = await ai.generate({
       system: playerIdentificationPrompt,
       prompt: [frame],
+      output: { schema: outputSchema },
     });
-    console.log(response);
-    return response.data;
+    if (!response.output) throw new Error("Failed to generate recipe");
+    console.log(response.output);
+    return response.output;
   }
 );
 

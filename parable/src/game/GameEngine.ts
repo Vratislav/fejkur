@@ -1,3 +1,4 @@
+import { narrationFlow } from "../ai/flows/narrationFlow";
 import { playerIdentificationFlow } from "../ai/flows/playerIdentificationFlow";
 import { HumanDetectionResult } from "../humanDetection";
 import { INarrator } from "../INarrator";
@@ -37,6 +38,7 @@ export class GameEngine {
   readonly opts: GameEngineOpts;
   readonly frameProvider: ICameraFrameProvider;
   readonly humanDetector: IHumanDetector;
+  readonly narrator: INarrator;
   lastTickWithHumanTimestamp: number = Date.now();
   amountOfTicksWithHuman: number = 0;
   dropHintChance: number = 0.0;
@@ -48,6 +50,7 @@ export class GameEngine {
     this.opts = opts;
     this.humanDetector = opts.humanDetector;
     this.frameProvider = opts.frameProvider;
+    this.narrator = opts.narrator;
   }
 
   async startEngine() {
@@ -127,6 +130,9 @@ export class GameEngine {
       await this.doStartedGameTick(frame, detection);
       return;
     }
+    if (this.state == GameEngineState.PLAYING) {
+      await this.doPlayingGameTick(frame, detection);
+    }
   }
 
   private async identifyPlayers(frame: string): Promise<PlayerInformation[]> {
@@ -142,12 +148,25 @@ export class GameEngine {
     });
   }
 
+  async doPlayingGameTick(frame: string, detection: HumanDetectionResult) {
+    const narration = await narrationFlow({
+      framePath: frame,
+      players: this.players,
+    });
+    this.narrator.narrate(narration.narration);
+  }
+
   async doStartedGameTick(frame: string, detection: HumanDetectionResult) {
     this.players = await this.identifyPlayers(frame);
 
     if (this.players.length > 0) {
       console.log("Players identified:");
       console.log(this.players);
+      const narration = await narrationFlow({
+        framePath: frame,
+        players: this.players,
+      });
+      this.narrator.narrate(narration.narration);
       this.transitionToState(GameEngineState.PLAYING);
     }
   }

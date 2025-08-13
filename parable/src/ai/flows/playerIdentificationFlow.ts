@@ -2,6 +2,7 @@ import googleAI from "@genkit-ai/googleai";
 import { readFile } from "fs/promises";
 import { genkit, z } from "genkit";
 import { text } from "stream/consumers";
+import { frameToLLMInput } from "./ai";
 
 // Initialize Genkit with the Google AI plugin
 const ai = genkit({
@@ -66,6 +67,7 @@ export const playerIdentificationFlow = ai.defineFlow(
     const response = await ai.generate({
       system: playerIdentificationPrompt,
       prompt: [frame],
+      docs: [],
       output: { schema: outputSchema },
     });
     if (!response.output) throw new Error("Failed to generate recipe");
@@ -73,10 +75,3 @@ export const playerIdentificationFlow = ai.defineFlow(
     return response.output;
   }
 );
-
-export async function frameToLLMInput(framePath: string) {
-  const data = await readFile(framePath);
-  return {
-    media: { url: `data:image/jpeg;base64,${data.toString("base64")}` },
-  };
-}

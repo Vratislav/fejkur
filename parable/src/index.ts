@@ -35,13 +35,12 @@ function getRtspUrlFromEnv() {
 async function main() {
   try {
     console.log("Starting game engine...");
-    const narrator = new ConsoleNarrator();
     const llm = new StubLLM();
     const engine = new GameEngine({
       frameProvider: new TestCameraFrameProvider(),
       humanDetector: new RealHumanDetector(),
       llm: new StubLLM(),
-      narrator: new ConsoleNarrator(),
+      narrator: new ConsoleNarrator(true),
       tickMs: 15_000,
       maxFrameStalenessMs: 5_000,
       maxTimeIntervalWithoutHumanMs: 60_000,

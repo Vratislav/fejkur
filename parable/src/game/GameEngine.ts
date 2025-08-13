@@ -1,3 +1,4 @@
+import { playerIdentificationFlow } from "../ai/flows/playerIdentificationFlow";
 import { HumanDetectionResult } from "../humanDetection";
 import { INarrator } from "../INarrator";
 import { ILLM } from "../lLLM";
@@ -13,6 +14,14 @@ export interface GameEngineOpts {
   maxFrameStalenessMs: number;
   maxTimeIntervalWithoutHumanMs: number;
   stepThroughTicks?: boolean;
+}
+
+export interface PlayerInformation {
+  appearance: string;
+  activity: string;
+  holdingInHands?: string;
+  gender: "male" | "female";
+  name?: string;
 }
 
 export enum GameEngineState {
@@ -32,6 +41,7 @@ export class GameEngine {
   amountOfTicksWithHuman: number = 0;
   dropHintChance: number = 0.0;
   intervalHandle?: NodeJS.Timeout;
+  players: PlayerInformation[] = [];
   state: GameEngineState = GameEngineState.IDLE;
 
   constructor(opts: GameEngineOpts) {
@@ -83,6 +93,7 @@ export class GameEngine {
   async resetGame() {
     this.transitionToState(GameEngineState.IDLE);
     this.amountOfTicksWithHuman = 0;
+    this.players = [];
     console.log("GAME RESET");
   }
 
@@ -114,10 +125,30 @@ export class GameEngine {
     }
     if (this.state == GameEngineState.STARTED) {
       await this.doStartedGameTick(frame, detection);
+      return;
     }
   }
 
+  private async identifyPlayers(frame: string): Promise<PlayerInformation[]> {
+    const playersFromLLM = await playerIdentificationFlow({
+      framePath: frame,
+    });
+
+    return playersFromLLM.map((player): PlayerInformation => {
+      return {
+        ...player,
+        holdingInHands: player.holdingInHands || undefined,
+      };
+    });
+  }
+
   async doStartedGameTick(frame: string, detection: HumanDetectionResult) {
-    this.transitionToState(GameEngineState.PLAYING);
+    this.players = await this.identifyPlayers(frame);
+
+    if (this.players.length > 0) {
+      console.log("Players identified:");
+      console.log(this.players);
+      this.transitionToState(GameEngineState.PLAYING);
+    }
   }
 }

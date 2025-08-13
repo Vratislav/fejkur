@@ -12,7 +12,7 @@ const ai = genkit({
 });
 
 export const playerIdentificationSchema = z.object({
-  appareance: z.string(),
+  appearance: z.string(),
   activity: z.string(),
   gender: z.enum(["male", "female"]),
   holdingInHands: z.string(),

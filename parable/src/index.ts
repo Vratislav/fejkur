@@ -45,6 +45,7 @@ async function main() {
       tickMs: 15_000,
       maxFrameStalenessMs: 5_000,
       maxTimeIntervalWithoutHumanMs: 60_000,
+      stepThroughTicks: Boolean(process.env.GAME_ENGINE_STEP_THROUGH),
     });
     await engine.startEngine();
   } catch (error) {

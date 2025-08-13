@@ -12,22 +12,25 @@ export interface GameEngineOpts {
   tickMs: number;
   maxFrameStalenessMs: number;
   maxTimeIntervalWithoutHumanMs: number;
+  stepThroughTicks?: boolean;
 }
 
 export enum GameEngineState {
-  IDLE,
-  STARTING,
-  STARTED,
-  PLAYING,
-  ESCAPED,
-  ENDED,
+  IDLE = "IDLE",
+  STARTING = "STARTING",
+  STARTED = "STARTED",
+  PLAYING = "PLAYING",
+  ESCAPED = "ESCAPED",
+  ENDED = "ENDED",
 }
 
 export class GameEngine {
   readonly opts: GameEngineOpts;
   readonly frameProvider: ICameraFrameProvider;
   readonly humanDetector: IHumanDetector;
-  lastTickWithHumanTimestamp: number = 0;
+  lastTickWithHumanTimestamp: number = Date.now();
+  amountOfTicksWithHuman: number = 0;
+  dropHintChance: number = 0.0;
   intervalHandle?: NodeJS.Timeout;
   state: GameEngineState = GameEngineState.IDLE;
 
@@ -38,29 +41,55 @@ export class GameEngine {
   }
 
   async startEngine() {
-    this.intervalHandle = setInterval(async () => {
-      const frame = await this.frameProvider.getLatestFrame();
-      if (Date.now() - frame.timestamp > this.opts.maxFrameStalenessMs) {
-        console.log(`Frame is stale, skipping: ${frame.path}`);
-        return;
-      }
-      //Run the human detection
-      const humanDetectionResult = await this.humanDetector.detectHumans(
-        frame.path
-      );
-      await this.checkForHumanStalenessAndResetGame(humanDetectionResult);
-      await this.doGameTick(frame.path, humanDetectionResult);
-    }, this.opts.tickMs);
+    console.log("FEJKUR GAME ENGINE STARTED");
+    if (this.opts.stepThroughTicks) {
+      console.log("STEP THROUGH ENABLED!");
+    }
+    await this.doTick();
+  }
+
+  async doTick() {
+    const processTickStart = Date.now();
+    const frame = await this.frameProvider.getLatestFrame();
+    if (Date.now() - frame.timestamp > this.opts.maxFrameStalenessMs) {
+      console.log(`Frame is stale, skipping: ${frame.path}`);
+      return;
+    }
+    //Run the human detection
+    const humanDetectionResult = await this.humanDetector.detectHumans(
+      frame.path
+    );
+    console.log(`Humans: ${humanDetectionResult.humansCount}`);
+    await this.checkForHumanStalenessAndResetGame(humanDetectionResult);
+    await this.doGameTick(frame.path, humanDetectionResult);
+    const processTickEnd = Date.now();
+    const processTickDuration = processTickEnd - processTickStart;
+    console.log(`Tick took ${processTickDuration}ms`);
+    if (this.opts.stepThroughTicks) {
+      console.log("press any Key...");
+      //Wait for enter key to be pressed
+      process.stdin.once("data", async () => {
+        this.intervalHandle = setTimeout(async () => {
+          await this.doTick();
+        }, 0);
+      });
+    } else {
+      this.intervalHandle = setTimeout(async () => {
+        await this.doTick();
+      }, Math.max(0, this.opts.tickMs - processTickDuration));
+    }
   }
 
   async resetGame() {
     this.transitionToState(GameEngineState.IDLE);
+    this.amountOfTicksWithHuman = 0;
     console.log("GAME RESET");
   }
 
   async checkForHumanStalenessAndResetGame(detection: HumanDetectionResult) {
     if (detection.humansDetected) {
       this.lastTickWithHumanTimestamp = Date.now();
+      this.amountOfTicksWithHuman++;
     }
     const timeSinceLastHuman = Date.now() - this.lastTickWithHumanTimestamp;
     if (timeSinceLastHuman > this.opts.maxTimeIntervalWithoutHumanMs) {
@@ -76,7 +105,11 @@ export class GameEngine {
   }
 
   async doGameTick(frame: string, detection: HumanDetectionResult) {
-    if (this.state == GameEngineState.IDLE && detection.humansDetected) {
+    if (
+      this.state == GameEngineState.IDLE &&
+      detection.humansDetected &&
+      this.amountOfTicksWithHuman >= 2
+    ) {
       this.transitionToState(GameEngineState.STARTED);
     }
     if (this.state == GameEngineState.STARTED) {

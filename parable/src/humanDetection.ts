@@ -11,7 +11,7 @@ export type HumanDetectionResult = {
 export type HumanDetectionOptions = {
   useServer?: boolean;
   serverUrl?: string;
-  conf?: number;
+  confidence?: number;
 };
 
 /**
@@ -127,14 +127,14 @@ async function detectViaServer(
     options?.serverUrl ||
     process.env.FEJKUR_YOLO_SERVER_URL ||
     "http://127.0.0.1:8001/detect";
-  const conf = options?.conf ?? 0.5;
+  const confidence = options?.confidence ?? 0.5;
   type Response = {
     humansDetected: boolean;
     humansCount: number;
   };
   const { data } = await axios.post<Response>(serverUrl, {
     source_path: absSourcePath,
-    conf,
+    conf: confidence,
     save_txt: true,
     save_conf: true,
   });

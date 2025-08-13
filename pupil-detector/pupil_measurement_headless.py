@@ -20,7 +20,7 @@ from OrloskyPupilDetectorRaspberryPi import (
     mask_outside_square, filter_contours_by_area_and_return_largest
 )
 
-# Fix display environment for Pi
+# Fix display environment for Pi - headless mode
 os.environ.pop('DISPLAY', None)  # Remove any SSH forwarded display
 os.environ.pop('SSH_CLIENT', None)  # Remove SSH indicators
 os.environ['DISPLAY'] = ':0'  # Use local display
@@ -37,24 +37,11 @@ LED_INVERT = False   # True to invert the signal
 PROXIMITY_PIN = 4    # GPIO pin for proximity sensor
 IR_LED_PIN = 13     # GPIO pin for IR LED (PWM1)
 IR_LED_FREQ = 100   # PWM frequency for IR LED
-STABLE_THRESHOLD = 3  # Maximum allowed pupil size variation to consider stable (in pixels) - more stringent
-STABLE_FRAMES = 10   # Number of frames pupil size must be stable for - more frames for stability
+STABLE_THRESHOLD = 3  # Maximum allowed pupil size variation to consider stable (in pixels)
+STABLE_FRAMES = 10   # Number of frames pupil size must be stable for
 
-class CustomOutput(FileOutput):
-    """Custom output that can handle overlay frames"""
-    def __init__(self, file, overlay_callback=None):
-        super().__init__(file)
-        self.overlay_callback = overlay_callback
-        
-    def outputframe(self, frame, keyframe=True, timestamp=None):
-        if self.overlay_callback:
-            frame = self.overlay_callback(frame)
-        return super().outputframe(frame, keyframe, timestamp)
-
-class SimplePupilMeasurement:
-    def __init__(self, record_video=True, show_preview=True):
-        self.record_video = record_video
-        self.show_preview = show_preview
+class HeadlessPupilMeasurement:
+    def __init__(self):
         self.recording = False
         self.recording_dir = None
         self.frame_count = 0
@@ -72,27 +59,15 @@ class SimplePupilMeasurement:
         self.last_pupil_sizes = []
         
     def setup_camera(self):
-        """Initialize camera - use exact working method"""
-        print("Setting up camera...")
+        """Initialize camera - headless mode"""
+        print("Setting up camera in headless mode...")
         self.camera = Picamera2()
         
-        # Use the exact same configuration that works
-        preview_config = self.camera.create_preview_configuration(main={"size": (640, 480)})
-        self.camera.configure(preview_config)
-        
-        # Start with or without preview based on option
-        if self.show_preview:
-            try:
-                self.camera.start(show_preview=True)
-                print("Camera started with preview")
-            except Exception as e:
-                print(f"Preview failed: {e}")
-                print("Starting camera without preview...")
-                self.camera.start()
-                self.show_preview = False
-        else:
-            self.camera.start()
-            print("Camera started without preview")
+        # Use simple configuration for headless operation
+        config = self.camera.create_preview_configuration(main={"size": (640, 480)})
+        self.camera.configure(config)
+        self.camera.start()
+        print("Camera started in headless mode")
         
     def setup_gpio(self):
         """Initialize GPIO for LEDs and sensors"""
@@ -116,9 +91,6 @@ class SimplePupilMeasurement:
             
     def start_recording(self):
         """Start video recording by saving individual frames"""
-        if not self.record_video:
-            return
-            
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         recordings_dir = "/home/fejkur/recordings"
         os.makedirs(recordings_dir, exist_ok=True)
@@ -188,7 +160,7 @@ class SimplePupilMeasurement:
                 frame_filename = f"{self.recording_dir}/frame_{self.frame_count:06d}.jpg"
                 cv2.imwrite(frame_filename, frame)
                 self.frame_count += 1
-            
+    
     def add_debug_overlay(self, frame, pupil_x=None, pupil_y=None, pupil_radius=None, ellipse=None):
         """Add debug overlay to frame with measurement information - matches JEOresearch visualization"""
         overlay_frame = frame.copy()
@@ -377,10 +349,9 @@ class SimplePupilMeasurement:
         return False
 
     def run_measurement_sequence(self):
-        """Run the complete measurement sequence with recording"""
-        print("Starting full pupil measurement sequence with recording...")
-        print("You should see the camera preview on your display")
-        print("The system will wait for proximity trigger or start immediately")
+        """Run the complete measurement sequence with recording - headless mode"""
+        print("Starting headless pupil measurement sequence...")
+        print("System will wait for proximity trigger or start immediately")
         print("Press Ctrl+C to stop")
         
         try:
@@ -404,7 +375,7 @@ class SimplePupilMeasurement:
                 self.current_phase = "Phase 1: IR Only"
                 print("Phase 1: IR light only - measuring baseline pupil size...")
                 self.set_all_color(0, 0, 0)  # No white light
-                self.set_ir_led(25)  # 75% IR LED brightness only
+                self.set_ir_led(25)  # 25% IR LED brightness only
                 self.last_pupil_sizes = []  # Reset stability tracking
                 
                 measurement_start = time.time()
@@ -414,7 +385,7 @@ class SimplePupilMeasurement:
                     frame = self.camera.capture_array()
                     x, y, radius, ellipse = self.detect_pupil(frame)
                     
-                    # Always save frame with overlay (regardless of recording setting)
+                    # Always save frame with overlay (even in headless mode)
                     overlay_frame = self.add_debug_overlay(frame, x, y, radius, ellipse)
                     self.write_frame_to_video(overlay_frame)
                     
@@ -445,7 +416,7 @@ class SimplePupilMeasurement:
                 self.current_phase = "Phase 2: Measuring Response"
                 print("Phase 2: Measuring pupil response to 15% white light...")
                 self.set_all_color(255, 255, 255, 15)  # 15% white light
-                # Keep IR LED at 75%
+                # Keep IR LED at 25%
                 self.last_pupil_sizes = []  # Reset stability tracking
                 
                 # Wait a moment for pupil to adjust
@@ -458,7 +429,7 @@ class SimplePupilMeasurement:
                     frame = self.camera.capture_array()
                     new_x, new_y, new_radius, new_ellipse = self.detect_pupil(frame)
                     
-                    # Always save frame with overlay (regardless of recording setting)
+                    # Always save frame with overlay (even in headless mode)
                     overlay_frame = self.add_debug_overlay(frame, new_x, new_y, new_radius, new_ellipse)
                     self.write_frame_to_video(overlay_frame)
                     
@@ -474,7 +445,7 @@ class SimplePupilMeasurement:
                     time.sleep(0.1)
                 
                 if second_radius is None:
-                    print("✗ Phase 3 failed - no stable pupil detected with white light")
+                    print("✗ Phase 2 failed - no stable pupil detected with white light")
                     self.set_all_color(0, 0, 0)
                     self.set_ir_led(0)
                     self.stop_recording()
@@ -487,7 +458,7 @@ class SimplePupilMeasurement:
                 
                 print(f"\n=== MEASUREMENT COMPLETE ===")
                 print(f"Baseline pupil size (IR only): {first_radius} pixels")
-                print(f"Response pupil size (5% white): {second_radius} pixels")
+                print(f"Response pupil size (15% white): {second_radius} pixels")
                 print(f"Size change: {size_change:.1f}%")
                 print(f"Absolute difference: {size_difference:.1f} pixels")
                 
@@ -542,15 +513,14 @@ class SimplePupilMeasurement:
         print("Cleanup complete")
 
 if __name__ == "__main__":
-    print("Full Pupil Measurement System with Recording")
+    print("Headless Pupil Measurement System")
     print("=" * 50)
     print("All frames will be saved for analysis")
-    print("Stability requires 15 consecutive frames with <1.5px variation")
+    print("Stability requires 10 consecutive frames with <3px variation")
     print("=" * 50)
     
     try:
-        # Always record video and try with preview first
-        pupil_system = SimplePupilMeasurement(record_video=True, show_preview=True)
+        pupil_system = HeadlessPupilMeasurement()
         pupil_system.run_measurement_sequence()
     except Exception as e:
         print(f"Error: {e}")

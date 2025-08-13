@@ -7,26 +7,26 @@ import glob
 from typing import Tuple, Optional, List
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import threading
 import time
 
-class PupilDetectionTuner:
+class SimplePupilDetectionTuner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Pupil Detection Parameter Tuner")
+        self.root.title("Simple Pupil Detection Tuner")
         self.root.geometry("800x600")
         
         # Detection parameters (with defaults)
         self.params = {
-            'blur_kernel': 15,
-            'adaptive_block': 11,
-            'adaptive_c': 2,
-            'min_area': 100,
-            'max_area': 2000,
-            'darkness_threshold': 0.3,
-            'darkness_weight': 1.0,
-            'circularity_weight': 0.5,
-            'center_weight': 0.3
+            'contrast_alpha': 2.0,      # Contrast multiplier
+            'contrast_beta': -50,        # Brightness offset
+            'blur_kernel': 5,            # Blur kernel size
+            'min_area': 400,             # Minimum blob area (20x20)
+            'max_area': 108900,          # Maximum blob area (330x330)
+            'min_circularity': 0.3,      # Minimum circularity (0-1)
+            'threshold_value': 50,       # Binary threshold value
+            'center_weight': 0.5,        # Weight for center proximity
+            'size_weight': 0.3,          # Weight for size preference
+            'circularity_weight': 0.2    # Weight for circularity
         }
         
         # State variables
@@ -42,8 +42,8 @@ class PupilDetectionTuner:
         self.load_recordings()
         
         # Create OpenCV window for display
-        cv2.namedWindow("Pupil Detection", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Pupil Detection", 640, 480)
+        cv2.namedWindow("Simple Pupil Detection", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Simple Pupil Detection", 640, 480)
         
     def setup_ui(self):
         """Setup the user interface"""
@@ -98,15 +98,16 @@ class PupilDetectionTuner:
         # Create sliders for each parameter in a grid
         self.param_vars = {}
         param_configs = [
-            ('blur_kernel', 'Blur Kernel', 3, 31, 2),
-            ('adaptive_block', 'Adaptive Block', 3, 21, 2),
-            ('adaptive_c', 'Adaptive C', -10, 10, 1),
-            ('min_area', 'Min Area', 50, 500, 25),
-            ('max_area', 'Max Area', 500, 5000, 250),
-            ('darkness_threshold', 'Darkness Thresh', 0.1, 0.8, 0.05),
-            ('darkness_weight', 'Darkness Weight', 0.5, 2.0, 0.1),
-            ('circularity_weight', 'Circularity Weight', 0.1, 1.0, 0.1),
-            ('center_weight', 'Center Weight', 0.1, 1.0, 0.1)
+            ('contrast_alpha', 'Contrast Alpha', 1.0, 4.0, 0.1),
+            ('contrast_beta', 'Contrast Beta', -100, 50, 5),
+            ('blur_kernel', 'Blur Kernel', 3, 21, 2),
+            ('threshold_value', 'Threshold', 0, 255, 5),
+            ('min_area', 'Min Area', 100, 1000, 50),
+            ('max_area', 'Max Area', 10000, 150000, 5000),
+            ('min_circularity', 'Min Circularity', 0.1, 0.9, 0.05),
+            ('center_weight', 'Center Weight', 0.1, 1.0, 0.1),
+            ('size_weight', 'Size Weight', 0.1, 1.0, 0.1),
+            ('circularity_weight', 'Circularity Weight', 0.1, 1.0, 0.1)
         ]
         
         # Create parameters in 3 columns
@@ -156,8 +157,8 @@ class PupilDetectionTuner:
         """Load available recordings"""
         # Try multiple possible locations
         possible_dirs = [
-            "/home/fejkur/recordings",
-            "./recordings", 
+            "./recordings",
+            "/home/fejkur/recordings", 
             ".",
             os.path.expanduser("~/recordings")
         ]
@@ -258,37 +259,36 @@ class PupilDetectionTuner:
         if not self.playing:
             self.display_current_frame()
             
-    def detect_pupil_with_params(self, frame):
-        """Detect pupil using contour-based approach with ellipse fitting"""
+    def detect_pupil_simple(self, frame):
+        """Simple pupil detection using contrast enhancement and black blob detection"""
+        # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Apply blur with current kernel size
+        # Apply contrast enhancement
+        enhanced = cv2.convertScaleAbs(gray, 
+                                     alpha=self.params['contrast_alpha'], 
+                                     beta=self.params['contrast_beta'])
+        
+        # Apply blur
         kernel_size = int(self.params['blur_kernel'])
         if kernel_size % 2 == 0:
             kernel_size += 1
-        gray = cv2.GaussianBlur(gray, (kernel_size, kernel_size), 0)
+        blurred = cv2.GaussianBlur(enhanced, (kernel_size, kernel_size), 0)
         
         # Create center mask
         height, width = gray.shape
         center_x, center_y = width // 2, height // 2
-        mask = np.zeros(gray.shape, dtype=np.uint8)
+        mask = np.zeros((height, width), dtype=np.uint8)
         cv2.circle(mask, (center_x, center_y), min(width, height) // 3, 255, -1)
         
         # Apply mask
-        masked_gray = cv2.bitwise_and(gray, mask)
+        masked = cv2.bitwise_and(blurred, mask)
         
-        # Adaptive thresholding for better pupil detection
-        thresh = cv2.adaptiveThreshold(
-            masked_gray, 
-            255, 
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY_INV, 
-            int(self.params['adaptive_block']), 
-            int(self.params['adaptive_c'])
-        )
+        # Binary threshold to find dark regions
+        _, thresh = cv2.threshold(masked, self.params['threshold_value'], 255, cv2.THRESH_BINARY_INV)
         
         # Morphological operations to clean up
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
         
@@ -304,54 +304,50 @@ class PupilDetectionTuner:
             max_area = int(self.params['max_area'])
             
             if min_area <= area <= max_area:
-                # Fit ellipse
-                if len(contour) >= 5:  # Need at least 5 points for ellipse fitting
-                    try:
-                        ellipse = cv2.fitEllipse(contour)
-                        (x, y), (major_axis, minor_axis), angle = ellipse
-                        
-                        # Filter by aspect ratio (should be roughly circular)
-                        aspect_ratio = major_axis / minor_axis if minor_axis > 0 else 0
-                        if 0.5 <= aspect_ratio <= 2.0:  # Allow some ovalness
-                            
-                            # Check darkness of the region
-                            mask_roi = np.zeros(gray.shape, dtype=np.uint8)
-                            cv2.fillPoly(mask_roi, [contour], 255)
-                            mean_intensity = cv2.mean(gray, mask=mask_roi)[0]
-                            
-                            # Calculate distance from center
-                            distance_from_center = np.sqrt((x - center_x)**2 + (y - center_y)**2)
-                            
-                            # Score based on darkness, circularity, and center proximity
-                            darkness_score = 1.0 - (mean_intensity / 255.0)
-                            circularity = 4 * np.pi * area / (cv2.arcLength(contour, True) ** 2) if cv2.arcLength(contour, True) > 0 else 0
-                            center_score = 1.0 - (distance_from_center / (min(width, height) / 2))
-                            
-                            # Combined score
-                            total_score = (darkness_score * self.params['darkness_weight'] + 
-                                         circularity * self.params['circularity_weight'] + 
-                                         center_score * self.params['center_weight'])
-                            
-                            # Only include if dark enough
-                            if darkness_score > self.params['darkness_threshold']:
+                # Calculate circularity
+                perimeter = cv2.arcLength(contour, True)
+                if perimeter > 0:
+                    circularity = 4 * np.pi * area / (perimeter ** 2)
+                    
+                    # Filter by circularity
+                    if circularity >= self.params['min_circularity']:
+                        # Fit ellipse
+                        if len(contour) >= 5:
+                            try:
+                                ellipse = cv2.fitEllipse(contour)
+                                (x, y), (major_axis, minor_axis), angle = ellipse
+                                
+                                # Calculate distance from center
+                                distance_from_center = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+                                
+                                # Calculate scores
+                                center_score = 1.0 - (distance_from_center / (min(width, height) / 2))
+                                size_score = 1.0 - abs(area - 10000) / 10000  # Prefer medium size
+                                circularity_score = circularity
+                                
+                                # Combined score
+                                total_score = (center_score * self.params['center_weight'] + 
+                                             size_score * self.params['size_weight'] + 
+                                             circularity_score * self.params['circularity_weight'])
+                                
                                 detected_pupils.append({
                                     'x': int(x), 'y': int(y), 
                                     'major_axis': major_axis, 'minor_axis': minor_axis,
                                     'angle': angle, 'area': area,
-                                    'darkness': darkness_score,
                                     'circularity': circularity,
                                     'center_score': center_score,
+                                    'size_score': size_score,
                                     'total_score': total_score,
                                     'distance': distance_from_center,
                                     'contour': contour
                                 })
-                    except:
-                        continue  # Skip if ellipse fitting fails
+                            except:
+                                continue  # Skip if ellipse fitting fails
         
         # Sort by total score
         detected_pupils.sort(key=lambda p: p['total_score'], reverse=True)
         
-        return detected_pupils, thresh
+        return detected_pupils, thresh, enhanced
         
     def display_current_frame(self):
         """Display current frame with detection overlay"""
@@ -365,7 +361,7 @@ class PupilDetectionTuner:
             return
             
         # Detect pupils
-        detected_pupils, thresh = self.detect_pupil_with_params(frame)
+        detected_pupils, thresh, enhanced = self.detect_pupil_simple(frame)
         
         # Create display frame
         display_frame = frame.copy()
@@ -392,10 +388,10 @@ class PupilDetectionTuner:
         
         # Add parameter info overlay
         y_offset = 30
-        cv2.putText(display_frame, f"Blur: {self.params['blur_kernel']}", (10, y_offset), 
+        cv2.putText(display_frame, f"Contrast: {self.params['contrast_alpha']:.1f}", (10, y_offset), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         y_offset += 20
-        cv2.putText(display_frame, f"Block: {self.params['adaptive_block']}", (10, y_offset), 
+        cv2.putText(display_frame, f"Threshold: {self.params['threshold_value']}", (10, y_offset), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         y_offset += 20
         cv2.putText(display_frame, f"Area: {self.params['min_area']}-{self.params['max_area']}", (10, y_offset), 
@@ -405,7 +401,7 @@ class PupilDetectionTuner:
         self.current_frame = display_frame
         
         # Display in OpenCV window
-        cv2.imshow("Pupil Detection", display_frame)
+        cv2.imshow("Simple Pupil Detection", display_frame)
         cv2.waitKey(1)  # Process window events
         
         # Update info display
@@ -419,7 +415,7 @@ class PupilDetectionTuner:
         
         if detected_pupils:
             best = detected_pupils[0]
-            info += f"Best: ({best['x']}, {best['y']}) R={best['r']} Score={best['total_score']:.3f}"
+            info += f"Best: ({best['x']}, {best['y']}) Size:{best['major_axis']:.1f}x{best['minor_axis']:.1f} Score={best['total_score']:.3f}"
         
         self.info_text.delete(1.0, tk.END)
         self.info_text.insert(1.0, info)
@@ -430,6 +426,7 @@ class PupilDetectionTuner:
             results += f"{i+1}. Pos:({pupil['x']},{pupil['y']}) "
             results += f"Size:{pupil['major_axis']:.1f}x{pupil['minor_axis']:.1f} "
             results += f"Area:{pupil['area']} "
+            results += f"Circ:{pupil['circularity']:.3f} "
             results += f"Score:{pupil['total_score']:.3f}\n"
         
         self.results_text.delete(1.0, tk.END)
@@ -477,8 +474,8 @@ class PupilDetectionTuner:
         
         if filename:
             with open(filename, 'w') as f:
-                f.write("# Pupil Detection Parameters\n")
-                f.write("# Generated by Pupil Detection Tuner\n\n")
+                f.write("# Simple Pupil Detection Parameters\n")
+                f.write("# Generated by Simple Pupil Detection Tuner\n\n")
                 for param, value in self.params.items():
                     f.write(f"{param} = {value}\n")
             
@@ -486,7 +483,7 @@ class PupilDetectionTuner:
 
 def main():
     root = tk.Tk()
-    app = PupilDetectionTuner(root)
+    app = SimplePupilDetectionTuner(root)
     
     def on_closing():
         cv2.destroyAllWindows()

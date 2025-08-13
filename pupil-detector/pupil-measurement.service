@@ -1,0 +1,27 @@
+[Unit]
+Description=Pupil Measurement System
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/pupil-detector
+Environment=DISPLAY=:0
+Environment=PYTHONPATH=/opt/pupil-detector
+ExecStart=/usr/bin/python3 /opt/pupil-detector/pupil_measurement_headless.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# GPIO access - root has full access
+# Camera access - root has full access
+
+# Allow running without display
+NoNewPrivileges=false
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target 

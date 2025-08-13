@@ -7,26 +7,29 @@ import glob
 from typing import Tuple, Optional, List
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import threading
 import time
 
-class PupilDetectionTuner:
+class JEOPupilDetectionTuner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Pupil Detection Parameter Tuner")
+        self.root.title("JEO EyeTracker Tuner")
         self.root.geometry("800x600")
         
-        # Detection parameters (with defaults)
+        # Detection parameters based on JEOresearch EyeTracker
         self.params = {
-            'blur_kernel': 15,
-            'adaptive_block': 11,
-            'adaptive_c': 2,
-            'min_area': 100,
-            'max_area': 2000,
-            'darkness_threshold': 0.3,
-            'darkness_weight': 1.0,
-            'circularity_weight': 0.5,
-            'center_weight': 0.3
+            'gaussian_blur': 5,         # Gaussian blur kernel size
+            'canny_low': 50,            # Canny edge detection low threshold
+            'canny_high': 150,          # Canny edge detection high threshold
+            'min_radius': 10,           # Minimum pupil radius
+            'max_radius': 80,           # Maximum pupil radius
+            'dp': 1,                    # HoughCircles resolution
+            'min_dist': 50,             # Minimum distance between circles
+            'param1': 50,               # Canny edge threshold
+            'param2': 30,               # Accumulator threshold
+            'darkness_threshold': 0.6,  # Minimum darkness for pupil
+            'center_weight': 0.4,       # Weight for center proximity
+            'size_weight': 0.3,         # Weight for size preference
+            'darkness_weight': 0.3      # Weight for darkness
         }
         
         # State variables
@@ -42,8 +45,8 @@ class PupilDetectionTuner:
         self.load_recordings()
         
         # Create OpenCV window for display
-        cv2.namedWindow("Pupil Detection", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Pupil Detection", 640, 480)
+        cv2.namedWindow("JEO Pupil Detection", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("JEO Pupil Detection", 640, 480)
         
     def setup_ui(self):
         """Setup the user interface"""
@@ -90,7 +93,7 @@ class PupilDetectionTuner:
                  orient=tk.HORIZONTAL, command=self.on_speed_changed).pack(fill=tk.X, pady=(0, 10))
         
         # Detection parameters in a grid
-        ttk.Label(parent, text="Detection Parameters", font=('Arial', 12, 'bold')).pack(pady=(10, 5))
+        ttk.Label(parent, text="JEO Detection Parameters", font=('Arial', 12, 'bold')).pack(pady=(10, 5))
         
         params_frame = ttk.Frame(parent)
         params_frame.pack(fill=tk.X, pady=(0, 10))
@@ -98,15 +101,19 @@ class PupilDetectionTuner:
         # Create sliders for each parameter in a grid
         self.param_vars = {}
         param_configs = [
-            ('blur_kernel', 'Blur Kernel', 3, 31, 2),
-            ('adaptive_block', 'Adaptive Block', 3, 21, 2),
-            ('adaptive_c', 'Adaptive C', -10, 10, 1),
-            ('min_area', 'Min Area', 50, 500, 25),
-            ('max_area', 'Max Area', 500, 5000, 250),
-            ('darkness_threshold', 'Darkness Thresh', 0.1, 0.8, 0.05),
-            ('darkness_weight', 'Darkness Weight', 0.5, 2.0, 0.1),
-            ('circularity_weight', 'Circularity Weight', 0.1, 1.0, 0.1),
-            ('center_weight', 'Center Weight', 0.1, 1.0, 0.1)
+            ('gaussian_blur', 'Gaussian Blur', 3, 15, 2),
+            ('canny_low', 'Canny Low', 10, 100, 5),
+            ('canny_high', 'Canny High', 50, 200, 10),
+            ('min_radius', 'Min Radius', 5, 30, 1),
+            ('max_radius', 'Max Radius', 30, 150, 5),
+            ('dp', 'DP', 1, 3, 1),
+            ('min_dist', 'Min Distance', 20, 100, 5),
+            ('param1', 'Param1', 20, 100, 5),
+            ('param2', 'Param2', 10, 50, 2),
+            ('darkness_threshold', 'Darkness Thresh', 0.3, 0.9, 0.05),
+            ('center_weight', 'Center Weight', 0.1, 1.0, 0.1),
+            ('size_weight', 'Size Weight', 0.1, 1.0, 0.1),
+            ('darkness_weight', 'Darkness Weight', 0.1, 1.0, 0.1)
         ]
         
         # Create parameters in 3 columns
@@ -156,8 +163,8 @@ class PupilDetectionTuner:
         """Load available recordings"""
         # Try multiple possible locations
         possible_dirs = [
-            "/home/fejkur/recordings",
-            "./recordings", 
+            "./recordings",
+            "/home/fejkur/recordings", 
             ".",
             os.path.expanduser("~/recordings")
         ]
@@ -240,12 +247,9 @@ class PupilDetectionTuner:
         
     def on_param_changed(self, param, value):
         """Handle parameter slider change"""
-        if param == 'blur_kernel':
-            # Ensure odd number for blur kernel
-            val = int(float(value))
-            if val % 2 == 0:
-                val += 1
-            self.params[param] = val
+        if param in ['gaussian_blur', 'min_radius', 'max_radius', 'dp', 'min_dist', 'param1', 'param2']:
+            # Ensure integer values for these parameters
+            self.params[param] = int(float(value))
         else:
             self.params[param] = float(value)
         
@@ -258,100 +262,83 @@ class PupilDetectionTuner:
         if not self.playing:
             self.display_current_frame()
             
-    def detect_pupil_with_params(self, frame):
-        """Detect pupil using contour-based approach with ellipse fitting"""
+    def detect_pupil_jeo(self, frame):
+        """JEOresearch EyeTracker-inspired pupil detection"""
+        # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Apply blur with current kernel size
-        kernel_size = int(self.params['blur_kernel'])
+        # Apply Gaussian blur
+        kernel_size = int(self.params['gaussian_blur'])
         if kernel_size % 2 == 0:
             kernel_size += 1
-        gray = cv2.GaussianBlur(gray, (kernel_size, kernel_size), 0)
+        blurred = cv2.GaussianBlur(gray, (kernel_size, kernel_size), 0)
         
         # Create center mask
         height, width = gray.shape
         center_x, center_y = width // 2, height // 2
-        mask = np.zeros(gray.shape, dtype=np.uint8)
+        mask = np.zeros((height, width), dtype=np.uint8)
         cv2.circle(mask, (center_x, center_y), min(width, height) // 3, 255, -1)
         
         # Apply mask
-        masked_gray = cv2.bitwise_and(gray, mask)
+        masked = cv2.bitwise_and(blurred, mask)
         
-        # Adaptive thresholding for better pupil detection
-        thresh = cv2.adaptiveThreshold(
-            masked_gray, 
-            255, 
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY_INV, 
-            int(self.params['adaptive_block']), 
-            int(self.params['adaptive_c'])
+        # Canny edge detection
+        edges = cv2.Canny(masked, 
+                         self.params['canny_low'], 
+                         self.params['canny_high'])
+        
+        # HoughCircles detection
+        circles = cv2.HoughCircles(
+            edges,
+            cv2.HOUGH_GRADIENT,
+            dp=self.params['dp'],
+            minDist=int(self.params['min_dist']),
+            param1=int(self.params['param1']),
+            param2=int(self.params['param2']),
+            minRadius=int(self.params['min_radius']),
+            maxRadius=int(self.params['max_radius'])
         )
-        
-        # Morphological operations to clean up
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-        
-        # Find contours
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         detected_pupils = []
         
-        for contour in contours:
-            # Filter by area
-            area = cv2.contourArea(contour)
-            min_area = int(self.params['min_area'])
-            max_area = int(self.params['max_area'])
+        if circles is not None:
+            circles = np.round(circles[0, :]).astype("int")
             
-            if min_area <= area <= max_area:
-                # Fit ellipse
-                if len(contour) >= 5:  # Need at least 5 points for ellipse fitting
-                    try:
-                        ellipse = cv2.fitEllipse(contour)
-                        (x, y), (major_axis, minor_axis), angle = ellipse
+            for (x, y, r) in circles:
+                if x - r > 0 and x + r < width and y - r > 0 and y + r < height:
+                    # Check darkness of the region
+                    roi = gray[y-r:y+r, x-r:x+r]
+                    if roi.size > 0:
+                        mean_intensity = np.mean(roi)
+                        darkness_score = 1.0 - (mean_intensity / 255.0)
                         
-                        # Filter by aspect ratio (should be roughly circular)
-                        aspect_ratio = major_axis / minor_axis if minor_axis > 0 else 0
-                        if 0.5 <= aspect_ratio <= 2.0:  # Allow some ovalness
-                            
-                            # Check darkness of the region
-                            mask_roi = np.zeros(gray.shape, dtype=np.uint8)
-                            cv2.fillPoly(mask_roi, [contour], 255)
-                            mean_intensity = cv2.mean(gray, mask=mask_roi)[0]
-                            
-                            # Calculate distance from center
-                            distance_from_center = np.sqrt((x - center_x)**2 + (y - center_y)**2)
-                            
-                            # Score based on darkness, circularity, and center proximity
-                            darkness_score = 1.0 - (mean_intensity / 255.0)
-                            circularity = 4 * np.pi * area / (cv2.arcLength(contour, True) ** 2) if cv2.arcLength(contour, True) > 0 else 0
-                            center_score = 1.0 - (distance_from_center / (min(width, height) / 2))
-                            
-                            # Combined score
-                            total_score = (darkness_score * self.params['darkness_weight'] + 
-                                         circularity * self.params['circularity_weight'] + 
-                                         center_score * self.params['center_weight'])
-                            
-                            # Only include if dark enough
-                            if darkness_score > self.params['darkness_threshold']:
-                                detected_pupils.append({
-                                    'x': int(x), 'y': int(y), 
-                                    'major_axis': major_axis, 'minor_axis': minor_axis,
-                                    'angle': angle, 'area': area,
-                                    'darkness': darkness_score,
-                                    'circularity': circularity,
-                                    'center_score': center_score,
-                                    'total_score': total_score,
-                                    'distance': distance_from_center,
-                                    'contour': contour
-                                })
-                    except:
-                        continue  # Skip if ellipse fitting fails
+                        # Calculate distance from center
+                        distance_from_center = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+                        center_score = 1.0 - (distance_from_center / (min(width, height) / 2))
+                        
+                        # Size preference (prefer medium-sized pupils)
+                        size_score = 1.0 - abs(r - 25) / 25  # Prefer radius around 25px
+                        
+                        # Combined score
+                        total_score = (darkness_score * self.params['darkness_weight'] + 
+                                     center_score * self.params['center_weight'] + 
+                                     size_score * self.params['size_weight'])
+                        
+                        # Only include if dark enough
+                        if darkness_score > self.params['darkness_threshold']:
+                            detected_pupils.append({
+                                'x': x, 'y': y, 'r': r,
+                                'darkness': darkness_score,
+                                'center_score': center_score,
+                                'size_score': size_score,
+                                'total_score': total_score,
+                                'distance': distance_from_center
+                            })
         
         # Sort by total score
         detected_pupils.sort(key=lambda p: p['total_score'], reverse=True)
         
-        return detected_pupils, thresh
+        return detected_pupils, edges
         
     def display_current_frame(self):
         """Display current frame with detection overlay"""
@@ -365,7 +352,7 @@ class PupilDetectionTuner:
             return
             
         # Detect pupils
-        detected_pupils, thresh = self.detect_pupil_with_params(frame)
+        detected_pupils, edges = self.detect_pupil_jeo(frame)
         
         # Create display frame
         display_frame = frame.copy()
@@ -378,34 +365,31 @@ class PupilDetectionTuner:
         for i, pupil in enumerate(detected_pupils):
             color = (0, 255, 0) if i == 0 else (0, 255, 255)  # Best in green, others in yellow
             
-            # Draw ellipse
-            ellipse = ((pupil['x'], pupil['y']), (pupil['major_axis'], pupil['minor_axis']), pupil['angle'])
-            cv2.ellipse(display_frame, ellipse, color, 2)
-            
-            # Draw center point
+            # Draw circle
+            cv2.circle(display_frame, (pupil['x'], pupil['y']), pupil['r'], color, 2)
             cv2.circle(display_frame, (pupil['x'], pupil['y']), 2, color, -1)
             
             # Add score text
             cv2.putText(display_frame, f"{pupil['total_score']:.2f}", 
-                       (pupil['x'] + int(pupil['major_axis']/2) + 5, pupil['y']),
+                       (pupil['x'] + pupil['r'] + 5, pupil['y']),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         
         # Add parameter info overlay
         y_offset = 30
-        cv2.putText(display_frame, f"Blur: {self.params['blur_kernel']}", (10, y_offset), 
+        cv2.putText(display_frame, f"Blur: {self.params['gaussian_blur']}", (10, y_offset), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         y_offset += 20
-        cv2.putText(display_frame, f"Block: {self.params['adaptive_block']}", (10, y_offset), 
+        cv2.putText(display_frame, f"Canny: {self.params['canny_low']}-{self.params['canny_high']}", (10, y_offset), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         y_offset += 20
-        cv2.putText(display_frame, f"Area: {self.params['min_area']}-{self.params['max_area']}", (10, y_offset), 
+        cv2.putText(display_frame, f"Radius: {self.params['min_radius']}-{self.params['max_radius']}", (10, y_offset), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         # Store current frame
         self.current_frame = display_frame
         
         # Display in OpenCV window
-        cv2.imshow("Pupil Detection", display_frame)
+        cv2.imshow("JEO Pupil Detection", display_frame)
         cv2.waitKey(1)  # Process window events
         
         # Update info display
@@ -427,9 +411,8 @@ class PupilDetectionTuner:
         # Update results
         results = "Detection Results:\n"
         for i, pupil in enumerate(detected_pupils[:3]):  # Show top 3
-            results += f"{i+1}. Pos:({pupil['x']},{pupil['y']}) "
-            results += f"Size:{pupil['major_axis']:.1f}x{pupil['minor_axis']:.1f} "
-            results += f"Area:{pupil['area']} "
+            results += f"{i+1}. Pos:({pupil['x']},{pupil['y']}) R:{pupil['r']} "
+            results += f"Dark:{pupil['darkness']:.3f} "
             results += f"Score:{pupil['total_score']:.3f}\n"
         
         self.results_text.delete(1.0, tk.END)
@@ -477,8 +460,9 @@ class PupilDetectionTuner:
         
         if filename:
             with open(filename, 'w') as f:
-                f.write("# Pupil Detection Parameters\n")
-                f.write("# Generated by Pupil Detection Tuner\n\n")
+                f.write("# JEO EyeTracker Parameters\n")
+                f.write("# Generated by JEO Pupil Detection Tuner\n")
+                f.write("# Based on https://github.com/JEOresearch/EyeTracker/\n\n")
                 for param, value in self.params.items():
                     f.write(f"{param} = {value}\n")
             
@@ -486,7 +470,7 @@ class PupilDetectionTuner:
 
 def main():
     root = tk.Tk()
-    app = PupilDetectionTuner(root)
+    app = JEOPupilDetectionTuner(root)
     
     def on_closing():
         cv2.destroyAllWindows()

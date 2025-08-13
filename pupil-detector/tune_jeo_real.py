@@ -7,26 +7,37 @@ import glob
 from typing import Tuple, Optional, List
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import threading
 import time
 
-class PupilDetectionTuner:
+# Import the actual JEOresearch functions
+import sys
+sys.path.append('./EyeTracker')
+from OrloskyPupilDetectorRaspberryPi import (
+    crop_to_aspect_ratio, apply_binary_threshold, get_darkest_area,
+    mask_outside_square, filter_contours_by_area_and_return_largest
+)
+
+class RealJEOPupilDetectionTuner:
     def __init__(self, root):
         self.root = root
-        self.root.title("Pupil Detection Parameter Tuner")
+        self.root.title("Real JEO EyeTracker Tuner")
         self.root.geometry("800x600")
         
-        # Detection parameters (with defaults)
+        # Detection parameters based on actual JEOresearch code
         self.params = {
-            'blur_kernel': 15,
-            'adaptive_block': 11,
-            'adaptive_c': 2,
-            'min_area': 100,
-            'max_area': 2000,
-            'darkness_threshold': 0.3,
-            'darkness_weight': 1.0,
-            'circularity_weight': 0.5,
-            'center_weight': 0.3
+            'ignore_bounds': 20,        # Ignore bounds for darkest area search
+            'image_skip_size': 20,      # Skip size for darkest area search
+            'search_area': 20,          # Search area size
+            'internal_skip_size': 10,   # Internal skip size
+            'added_threshold': 15,      # Added threshold for binary thresholding
+            'mask_size': 250,           # Size of mask around darkest point
+            'pixel_thresh': 1000,       # Minimum contour area
+            'ratio_thresh': 3,          # Maximum length/width ratio
+            'kernel_size': 5,           # Morphological kernel size
+            'dilation_iterations': 2,   # Number of dilation iterations
+            'center_weight': 0.4,       # Weight for center proximity
+            'size_weight': 0.3,         # Weight for size preference
+            'darkness_weight': 0.3      # Weight for darkness
         }
         
         # State variables
@@ -42,8 +53,8 @@ class PupilDetectionTuner:
         self.load_recordings()
         
         # Create OpenCV window for display
-        cv2.namedWindow("Pupil Detection", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Pupil Detection", 640, 480)
+        cv2.namedWindow("Real JEO Pupil Detection", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Real JEO Pupil Detection", 640, 480)
         
     def setup_ui(self):
         """Setup the user interface"""
@@ -90,7 +101,7 @@ class PupilDetectionTuner:
                  orient=tk.HORIZONTAL, command=self.on_speed_changed).pack(fill=tk.X, pady=(0, 10))
         
         # Detection parameters in a grid
-        ttk.Label(parent, text="Detection Parameters", font=('Arial', 12, 'bold')).pack(pady=(10, 5))
+        ttk.Label(parent, text="Real JEO Detection Parameters", font=('Arial', 12, 'bold')).pack(pady=(10, 5))
         
         params_frame = ttk.Frame(parent)
         params_frame.pack(fill=tk.X, pady=(0, 10))
@@ -98,15 +109,19 @@ class PupilDetectionTuner:
         # Create sliders for each parameter in a grid
         self.param_vars = {}
         param_configs = [
-            ('blur_kernel', 'Blur Kernel', 3, 31, 2),
-            ('adaptive_block', 'Adaptive Block', 3, 21, 2),
-            ('adaptive_c', 'Adaptive C', -10, 10, 1),
-            ('min_area', 'Min Area', 50, 500, 25),
-            ('max_area', 'Max Area', 500, 5000, 250),
-            ('darkness_threshold', 'Darkness Thresh', 0.1, 0.8, 0.05),
-            ('darkness_weight', 'Darkness Weight', 0.5, 2.0, 0.1),
-            ('circularity_weight', 'Circularity Weight', 0.1, 1.0, 0.1),
-            ('center_weight', 'Center Weight', 0.1, 1.0, 0.1)
+            ('ignore_bounds', 'Ignore Bounds', 10, 50, 5),
+            ('image_skip_size', 'Image Skip Size', 10, 50, 5),
+            ('search_area', 'Search Area', 10, 50, 5),
+            ('internal_skip_size', 'Internal Skip', 5, 20, 1),
+            ('added_threshold', 'Added Threshold', 5, 30, 1),
+            ('mask_size', 'Mask Size', 100, 400, 20),
+            ('pixel_thresh', 'Pixel Threshold', 500, 2000, 100),
+            ('ratio_thresh', 'Ratio Threshold', 2, 5, 0.5),
+            ('kernel_size', 'Kernel Size', 3, 9, 1),
+            ('dilation_iterations', 'Dilation Iter', 1, 5, 1),
+            ('center_weight', 'Center Weight', 0.1, 1.0, 0.1),
+            ('size_weight', 'Size Weight', 0.1, 1.0, 0.1),
+            ('darkness_weight', 'Darkness Weight', 0.1, 1.0, 0.1)
         ]
         
         # Create parameters in 3 columns
@@ -156,8 +171,8 @@ class PupilDetectionTuner:
         """Load available recordings"""
         # Try multiple possible locations
         possible_dirs = [
-            "/home/fejkur/recordings",
-            "./recordings", 
+            "./recordings",
+            "/home/fejkur/recordings", 
             ".",
             os.path.expanduser("~/recordings")
         ]
@@ -240,12 +255,10 @@ class PupilDetectionTuner:
         
     def on_param_changed(self, param, value):
         """Handle parameter slider change"""
-        if param == 'blur_kernel':
-            # Ensure odd number for blur kernel
-            val = int(float(value))
-            if val % 2 == 0:
-                val += 1
-            self.params[param] = val
+        if param in ['ignore_bounds', 'image_skip_size', 'search_area', 'internal_skip_size', 
+                    'added_threshold', 'mask_size', 'pixel_thresh', 'kernel_size', 'dilation_iterations']:
+            # Ensure integer values for these parameters
+            self.params[param] = int(float(value))
         else:
             self.params[param] = float(value)
         
@@ -258,100 +271,130 @@ class PupilDetectionTuner:
         if not self.playing:
             self.display_current_frame()
             
-    def detect_pupil_with_params(self, frame):
-        """Detect pupil using contour-based approach with ellipse fitting"""
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    def detect_pupil_real_jeo(self, frame):
+        """Real JEOresearch EyeTracker pupil detection"""
+        # Crop to aspect ratio
+        frame = crop_to_aspect_ratio(frame)
         
-        # Apply blur with current kernel size
-        kernel_size = int(self.params['blur_kernel'])
-        if kernel_size % 2 == 0:
-            kernel_size += 1
-        gray = cv2.GaussianBlur(gray, (kernel_size, kernel_size), 0)
+        # Get darkest area with custom parameters
+        darkest_point = self.get_darkest_area_custom(frame)
         
-        # Create center mask
-        height, width = gray.shape
-        center_x, center_y = width // 2, height // 2
-        mask = np.zeros(gray.shape, dtype=np.uint8)
-        cv2.circle(mask, (center_x, center_y), min(width, height) // 3, 255, -1)
+        if darkest_point is None:
+            return [], None
         
-        # Apply mask
-        masked_gray = cv2.bitwise_and(gray, mask)
+        # Convert to grayscale
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Adaptive thresholding for better pupil detection
-        thresh = cv2.adaptiveThreshold(
-            masked_gray, 
-            255, 
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY_INV, 
-            int(self.params['adaptive_block']), 
-            int(self.params['adaptive_c'])
-        )
+        # Get darkest pixel value
+        darkest_pixel_value = gray_frame[darkest_point[1], darkest_point[0]]
         
-        # Morphological operations to clean up
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        # Apply binary threshold with custom added threshold
+        thresholded_image = apply_binary_threshold(gray_frame, darkest_pixel_value, self.params['added_threshold'])
+        
+        # Mask outside square with custom size
+        thresholded_image = mask_outside_square(thresholded_image, darkest_point, self.params['mask_size'])
+        
+        # Process with custom parameters
+        detected_pupils = self.process_frames_custom(thresholded_image, frame, gray_frame, darkest_point)
+        
+        return detected_pupils, thresholded_image
+        
+    def get_darkest_area_custom(self, image):
+        """Custom version of get_darkest_area with adjustable parameters"""
+        ignore_bounds = int(self.params['ignore_bounds'])
+        image_skip_size = int(self.params['image_skip_size'])
+        search_area = int(self.params['search_area'])
+        internal_skip_size = int(self.params['internal_skip_size'])
+        
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        min_sum = float('inf')
+        darkest_point = None
+
+        for y in range(ignore_bounds, gray.shape[0] - ignore_bounds, image_skip_size):
+            for x in range(ignore_bounds, gray.shape[1] - ignore_bounds, image_skip_size):
+                current_sum = 0
+                num_pixels = 0
+                for dy in range(0, search_area, internal_skip_size):
+                    if y + dy >= gray.shape[0]:
+                        break
+                    for dx in range(0, search_area, internal_skip_size):
+                        if x + dx >= gray.shape[1]:
+                            break
+                        current_sum += gray[y + dy][x + dx]
+                        num_pixels += 1
+
+                if current_sum < min_sum and num_pixels > 0:
+                    min_sum = current_sum
+                    darkest_point = (x + search_area // 2, y + search_area // 2)
+
+        return darkest_point
+        
+    def process_frames_custom(self, thresholded_image, frame, gray_frame, darkest_point):
+        """Custom version of process_frames with adjustable parameters"""
+        kernel_size = int(self.params['kernel_size'])
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        dilation_iterations = int(self.params['dilation_iterations'])
+        
+        # Dilate the thresholded image
+        dilated_image = cv2.dilate(thresholded_image, kernel, iterations=dilation_iterations)
         
         # Find contours
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(dilated_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filter contours with custom parameters
+        pixel_thresh = int(self.params['pixel_thresh'])
+        ratio_thresh = self.params['ratio_thresh']
+        reduced_contours = filter_contours_by_area_and_return_largest(contours, pixel_thresh, ratio_thresh)
         
         detected_pupils = []
         
-        for contour in contours:
-            # Filter by area
-            area = cv2.contourArea(contour)
-            min_area = int(self.params['min_area'])
-            max_area = int(self.params['max_area'])
-            
-            if min_area <= area <= max_area:
-                # Fit ellipse
-                if len(contour) >= 5:  # Need at least 5 points for ellipse fitting
-                    try:
-                        ellipse = cv2.fitEllipse(contour)
-                        (x, y), (major_axis, minor_axis), angle = ellipse
-                        
-                        # Filter by aspect ratio (should be roughly circular)
-                        aspect_ratio = major_axis / minor_axis if minor_axis > 0 else 0
-                        if 0.5 <= aspect_ratio <= 2.0:  # Allow some ovalness
-                            
-                            # Check darkness of the region
-                            mask_roi = np.zeros(gray.shape, dtype=np.uint8)
-                            cv2.fillPoly(mask_roi, [contour], 255)
-                            mean_intensity = cv2.mean(gray, mask=mask_roi)[0]
-                            
-                            # Calculate distance from center
-                            distance_from_center = np.sqrt((x - center_x)**2 + (y - center_y)**2)
-                            
-                            # Score based on darkness, circularity, and center proximity
-                            darkness_score = 1.0 - (mean_intensity / 255.0)
-                            circularity = 4 * np.pi * area / (cv2.arcLength(contour, True) ** 2) if cv2.arcLength(contour, True) > 0 else 0
-                            center_score = 1.0 - (distance_from_center / (min(width, height) / 2))
-                            
-                            # Combined score
-                            total_score = (darkness_score * self.params['darkness_weight'] + 
-                                         circularity * self.params['circularity_weight'] + 
-                                         center_score * self.params['center_weight'])
-                            
-                            # Only include if dark enough
-                            if darkness_score > self.params['darkness_threshold']:
-                                detected_pupils.append({
-                                    'x': int(x), 'y': int(y), 
-                                    'major_axis': major_axis, 'minor_axis': minor_axis,
-                                    'angle': angle, 'area': area,
-                                    'darkness': darkness_score,
-                                    'circularity': circularity,
-                                    'center_score': center_score,
-                                    'total_score': total_score,
-                                    'distance': distance_from_center,
-                                    'contour': contour
-                                })
-                    except:
-                        continue  # Skip if ellipse fitting fails
+        if len(reduced_contours) > 0 and len(reduced_contours[0]) > 5:
+            try:
+                ellipse = cv2.fitEllipse(reduced_contours[0])
+                (x, y), (major_axis, minor_axis), angle = ellipse
+                
+                # Calculate scores
+                height, width = frame.shape[:2]
+                center_x, center_y = width // 2, height // 2
+                
+                # Distance from center
+                distance_from_center = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+                center_score = 1.0 - (distance_from_center / (min(width, height) / 2))
+                
+                # Size preference
+                area = np.pi * (major_axis / 2) * (minor_axis / 2)
+                size_score = 1.0 - abs(area - 1000) / 1000  # Prefer medium size
+                
+                # Darkness score
+                mask_roi = np.zeros(gray_frame.shape, dtype=np.uint8)
+                cv2.fillPoly(mask_roi, [reduced_contours[0]], 255)
+                mean_intensity = cv2.mean(gray_frame, mask=mask_roi)[0]
+                darkness_score = 1.0 - (mean_intensity / 255.0)
+                
+                # Combined score
+                total_score = (center_score * self.params['center_weight'] + 
+                             size_score * self.params['size_weight'] + 
+                             darkness_score * self.params['darkness_weight'])
+                
+                detected_pupils.append({
+                    'x': int(x), 'y': int(y),
+                    'major_axis': major_axis, 'minor_axis': minor_axis,
+                    'angle': angle, 'area': area,
+                    'center_score': center_score,
+                    'size_score': size_score,
+                    'darkness_score': darkness_score,
+                    'total_score': total_score,
+                    'distance': distance_from_center,
+                    'ellipse': ellipse
+                })
+                
+            except:
+                pass  # Skip if ellipse fitting fails
         
         # Sort by total score
         detected_pupils.sort(key=lambda p: p['total_score'], reverse=True)
         
-        return detected_pupils, thresh
+        return detected_pupils
         
     def display_current_frame(self):
         """Display current frame with detection overlay"""
@@ -364,8 +407,8 @@ class PupilDetectionTuner:
         if frame is None:
             return
             
-        # Detect pupils
-        detected_pupils, thresh = self.detect_pupil_with_params(frame)
+        # Detect pupils using real JEO algorithm
+        detected_pupils, thresholded_image = self.detect_pupil_real_jeo(frame)
         
         # Create display frame
         display_frame = frame.copy()
@@ -379,10 +422,7 @@ class PupilDetectionTuner:
             color = (0, 255, 0) if i == 0 else (0, 255, 255)  # Best in green, others in yellow
             
             # Draw ellipse
-            ellipse = ((pupil['x'], pupil['y']), (pupil['major_axis'], pupil['minor_axis']), pupil['angle'])
-            cv2.ellipse(display_frame, ellipse, color, 2)
-            
-            # Draw center point
+            cv2.ellipse(display_frame, pupil['ellipse'], color, 2)
             cv2.circle(display_frame, (pupil['x'], pupil['y']), 2, color, -1)
             
             # Add score text
@@ -392,20 +432,20 @@ class PupilDetectionTuner:
         
         # Add parameter info overlay
         y_offset = 30
-        cv2.putText(display_frame, f"Blur: {self.params['blur_kernel']}", (10, y_offset), 
+        cv2.putText(display_frame, f"Mask Size: {self.params['mask_size']}", (10, y_offset), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         y_offset += 20
-        cv2.putText(display_frame, f"Block: {self.params['adaptive_block']}", (10, y_offset), 
+        cv2.putText(display_frame, f"Pixel Thresh: {self.params['pixel_thresh']}", (10, y_offset), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         y_offset += 20
-        cv2.putText(display_frame, f"Area: {self.params['min_area']}-{self.params['max_area']}", (10, y_offset), 
+        cv2.putText(display_frame, f"Added Thresh: {self.params['added_threshold']}", (10, y_offset), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         # Store current frame
         self.current_frame = display_frame
         
         # Display in OpenCV window
-        cv2.imshow("Pupil Detection", display_frame)
+        cv2.imshow("Real JEO Pupil Detection", display_frame)
         cv2.waitKey(1)  # Process window events
         
         # Update info display
@@ -419,7 +459,7 @@ class PupilDetectionTuner:
         
         if detected_pupils:
             best = detected_pupils[0]
-            info += f"Best: ({best['x']}, {best['y']}) R={best['r']} Score={best['total_score']:.3f}"
+            info += f"Best: ({best['x']}, {best['y']}) Size:{best['major_axis']:.1f}x{best['minor_axis']:.1f} Score={best['total_score']:.3f}"
         
         self.info_text.delete(1.0, tk.END)
         self.info_text.insert(1.0, info)
@@ -429,7 +469,7 @@ class PupilDetectionTuner:
         for i, pupil in enumerate(detected_pupils[:3]):  # Show top 3
             results += f"{i+1}. Pos:({pupil['x']},{pupil['y']}) "
             results += f"Size:{pupil['major_axis']:.1f}x{pupil['minor_axis']:.1f} "
-            results += f"Area:{pupil['area']} "
+            results += f"Area:{pupil['area']:.0f} "
             results += f"Score:{pupil['total_score']:.3f}\n"
         
         self.results_text.delete(1.0, tk.END)
@@ -477,8 +517,9 @@ class PupilDetectionTuner:
         
         if filename:
             with open(filename, 'w') as f:
-                f.write("# Pupil Detection Parameters\n")
-                f.write("# Generated by Pupil Detection Tuner\n\n")
+                f.write("# Real JEO EyeTracker Parameters\n")
+                f.write("# Generated by Real JEO Pupil Detection Tuner\n")
+                f.write("# Based on OrloskyPupilDetectorRaspberryPi.py\n\n")
                 for param, value in self.params.items():
                     f.write(f"{param} = {value}\n")
             
@@ -486,7 +527,7 @@ class PupilDetectionTuner:
 
 def main():
     root = tk.Tk()
-    app = PupilDetectionTuner(root)
+    app = RealJEOPupilDetectionTuner(root)
     
     def on_closing():
         cv2.destroyAllWindows()

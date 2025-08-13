@@ -1,5 +1,5 @@
 import z from "zod";
-import { ILLM, LLMCallResult, LLMHistoryItem } from "../lLLM";
+import { ILLM, LLMCallResult, LLMHistoryItem } from "../../lLLM";
 
 export class StubLLM implements ILLM {
   async callLLM<TResponse>(opts: {

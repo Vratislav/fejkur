@@ -1,8 +1,10 @@
 import { createRtspUrl } from "./cameraUtils";
 import dotenv from "dotenv";
-import { GameEngine } from "./game/inspo/GameEngine";
+import { GameEngine } from "./game/GameEngine";
 import { ConsoleNarrator } from "./game/inspo/NarratorConsole";
 import { StubLLM } from "./game/inspo/LLMStub";
+import { TestCameraFrameProvider } from "./game/CameraFrameProvider";
+import { RealHumanDetector } from "./game/HumanDetector";
 
 // Load environment variables
 dotenv.config();
@@ -36,12 +38,15 @@ async function main() {
     const narrator = new ConsoleNarrator();
     const llm = new StubLLM();
     const engine = new GameEngine({
-      narrator,
-      llm,
-      config: { tickMs: 15000, yoloUseServer: true },
-      getRtspUrl: getRtspUrlFromEnv,
+      frameProvider: new TestCameraFrameProvider(),
+      humanDetector: new RealHumanDetector(),
+      llm: new StubLLM(),
+      narrator: new ConsoleNarrator(),
+      tickMs: 15_000,
+      maxFrameStalenessMs: 5_000,
+      maxTimeIntervalWithoutHumanMs: 60_000,
     });
-    await engine.start();
+    await engine.startEngine();
   } catch (error) {
     console.error("Failed to capture frame:", error);
     process.exit(1);

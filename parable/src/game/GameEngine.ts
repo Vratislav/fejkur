@@ -54,7 +54,7 @@ export class GameEngine {
   }
 
   async resetGame() {
-    this.state = GameEngineState.IDLE;
+    this.transitionToState(GameEngineState.IDLE);
     console.log("GAME RESET");
   }
 
@@ -69,9 +69,22 @@ export class GameEngine {
     }
   }
 
+  private transitionToState(newState: GameEngineState) {
+    const oldState = this.state;
+    console.log(`⏩ STATE ${oldState} => ${newState}`);
+    this.state = newState;
+  }
+
   async doGameTick(frame: string, detection: HumanDetectionResult) {
     if (this.state == GameEngineState.IDLE && detection.humansDetected) {
-      this.state = GameEngineState.STARTED;
+      this.transitionToState(GameEngineState.STARTED);
     }
+    if (this.state == GameEngineState.STARTED) {
+      await this.doStartedGameTick(frame, detection);
+    }
+  }
+
+  async doStartedGameTick(frame: string, detection: HumanDetectionResult) {
+    this.transitionToState(GameEngineState.PLAYING);
   }
 }

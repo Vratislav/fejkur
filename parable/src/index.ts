@@ -40,11 +40,11 @@ async function main() {
       frameProvider: new TestCameraFrameProvider(),
       humanDetector: new RealHumanDetector(),
       llm: new StubLLM(),
-      narrator: new ConsoleNarrator(true),
+      narrator: new ConsoleNarrator(process.env.VOICE_NARRATION === "true"),
       tickMs: 15_000,
       maxFrameStalenessMs: 5_000,
       maxTimeIntervalWithoutHumanMs: 60_000,
-      stepThroughTicks: Boolean(process.env.GAME_ENGINE_STEP_THROUGH),
+      stepThroughTicks: process.env.GAME_ENGINE_STEP_THROUGH === "true",
     });
     await engine.startEngine();
   } catch (error) {

@@ -85,6 +85,7 @@ export class GameEngine {
         );
         console.log(`Humans: ${humanDetectionResult.humansCount}`);
         await this.checkForHumanStalenessAndResetGame(humanDetectionResult);
+
         await this.doGameTick(frame.path, humanDetectionResult);
       } catch (e) {
         console.log("Error in GameEngine.doTick(): ", e);
@@ -123,8 +124,10 @@ export class GameEngine {
     }
     const timeSinceLastHuman = Date.now() - this.lastTickWithHumanTimestamp;
     if (timeSinceLastHuman > this.opts.maxTimeIntervalWithoutHumanMs) {
-      console.log("No humans detected for too long. Reseting the game.");
-      await this.resetGame();
+      if (this.state != GameEngineState.IDLE) {
+        console.log("No humans detected for too long. Reseting the game.");
+        await this.resetGame();
+      }
     }
   }
 

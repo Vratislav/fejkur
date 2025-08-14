@@ -141,7 +141,7 @@ export class GameEngine {
     if (
       this.state == GameEngineState.IDLE &&
       detection.humansDetected &&
-      this.amountOfTicksWithHuman >= 2
+      this.amountOfTicksWithHuman >= 1
     ) {
       this.transitionToState(GameEngineState.STARTED);
     }

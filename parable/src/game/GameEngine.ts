@@ -12,6 +12,7 @@ export interface GameEngineOpts {
   narrator: INarrator;
   humanDetector: IHumanDetector;
   tickMs: number;
+  delayTickAfterNarrationMs: number;
   maxFrameStalenessMs: number;
   maxTimeIntervalWithoutHumanMs: number;
   stepThroughTicks?: boolean;
@@ -43,6 +44,7 @@ export class GameEngine {
   lastTickWithHumanTimestamp: number = Date.now();
   amountOfTicksWithHuman: number = 0;
   dropHintChance: number = 0.0;
+  currentTickDelayMs: number = 0;
   intervalHandle?: NodeJS.Timeout;
   narrationHistory: string[] = [];
   players: PlayerInformation[] = [];
@@ -106,13 +108,14 @@ export class GameEngine {
     } else {
       this.intervalHandle = setTimeout(async () => {
         await this.doTick();
-      }, Math.max(0, this.opts.tickMs - processTickDuration));
+      }, Math.max(0, this.opts.tickMs - processTickDuration) + this.currentTickDelayMs);
     }
   }
 
   async resetGame() {
     this.transitionToState(GameEngineState.IDLE);
     this.amountOfTicksWithHuman = 0;
+    this.currentTickDelayMs = 0;
     this.players = [];
     console.log("GAME RESET");
   }
@@ -141,7 +144,7 @@ export class GameEngine {
     if (
       this.state == GameEngineState.IDLE &&
       detection.humansDetected &&
-      this.amountOfTicksWithHuman >= 1
+      this.amountOfTicksWithHuman >= 2
     ) {
       this.transitionToState(GameEngineState.STARTED);
     }
@@ -183,6 +186,7 @@ export class GameEngine {
     });
     this.narrationHistory.push(narration.narration);
     this.narrator.narrate(narration.narration);
+    this.currentTickDelayMs = this.opts.delayTickAfterNarrationMs;
   }
 
   async doStartedGameTick(frame: string, detection: HumanDetectionResult) {
@@ -198,6 +202,7 @@ export class GameEngine {
       });
       this.narrationHistory.push(narration.narration);
       this.narrator.narrate(narration.narration);
+      this.currentTickDelayMs = this.opts.delayTickAfterNarrationMs;
       this.transitionToState(GameEngineState.PLAYING);
     }
   }

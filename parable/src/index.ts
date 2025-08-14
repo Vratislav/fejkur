@@ -52,9 +52,9 @@ async function main() {
       humanDetector: new RealHumanDetector(),
       llm: new StubLLM(),
       narrator: new ConsoleNarrator(process.env.VOICE_NARRATION === "true"),
-      tickMs: 15_000,
+      tickMs: 45_000,
       maxFrameStalenessMs: 5_000,
-      maxTimeIntervalWithoutHumanMs: 60_000,
+      maxTimeIntervalWithoutHumanMs: 120_000,
       stepThroughTicks: process.env.GAME_ENGINE_STEP_THROUGH === "true",
     });
     await engine.startEngine();

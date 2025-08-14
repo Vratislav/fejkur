@@ -1,10 +1,110 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { Frame, ICameraFrameProvider } from "./ICameraFrameProvider";
+import { grabFrame, grabFrameWithOptions } from "../cameraUtils";
 
 export class RealCameraFrameProvider implements ICameraFrameProvider {
+  private rtspUrl: string;
+  private timeoutId?: NodeJS.Timeout;
+  private latestFrame?: Frame;
+  private isRunning: boolean = false;
+  private frameGrabInterval: number;
+
+  constructor(rtspUrl: string, frameGrabInterval: number = 1000) {
+    this.rtspUrl = rtspUrl;
+    this.frameGrabInterval = frameGrabInterval;
+  }
+
+  /**
+   * Starts the continuous frame grabbing loop
+   */
+  start(): void {
+    if (this.isRunning) {
+      console.log("RealCameraFrameProvider is already running");
+      return;
+    }
+
+    this.isRunning = true;
+    console.log(
+      `Starting RealCameraFrameProvider with interval: ${this.frameGrabInterval}ms`
+    );
+
+    // Start the frame grabbing loop
+    this.scheduleNextFrameGrab();
+  }
+
+  /**
+   * Stops the continuous frame grabbing loop
+   */
+  stop(): void {
+    if (!this.isRunning) {
+      console.log("RealCameraFrameProvider is not running");
+      return;
+    }
+
+    this.isRunning = false;
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = undefined;
+    }
+    console.log("RealCameraFrameProvider stopped");
+  }
+
+  /**
+   * Private method to schedule the next frame grab
+   */
+  private scheduleNextFrameGrab(): void {
+    if (!this.isRunning) return;
+
+    this.timeoutId = setTimeout(async () => {
+      await this.grabAndStoreFrame();
+      // Schedule the next frame grab after this one completes
+      this.scheduleNextFrameGrab();
+    }, this.frameGrabInterval);
+  }
+
+  /**
+   * Private method to grab a frame and store it
+   */
+  private async grabAndStoreFrame(): Promise<void> {
+    try {
+      const framePath = await grabFrame(this.rtspUrl);
+
+      this.latestFrame = {
+        path: framePath,
+        timestamp: Date.now(),
+      };
+
+      console.log(`Frame grabbed and stored: ${framePath}`);
+    } catch (error) {
+      console.error("Error grabbing frame:", error);
+      // Keep the previous frame if available, don't crash the loop
+    }
+  }
+
   async getLatestFrame(): Promise<Frame> {
-    return { path: "", timestamp: Date.now() };
+    if (!this.latestFrame) {
+      // If no frame has been grabbed yet, try to grab one immediately
+      if (!this.isRunning) {
+        throw new Error(
+          "RealCameraFrameProvider not started. Call start() first."
+        );
+      }
+
+      // Wait a bit for the first frame to be grabbed
+      let attempts = 0;
+      const maxAttempts = 300;
+      while (!this.latestFrame && attempts < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        attempts++;
+      }
+
+      if (!this.latestFrame) {
+        throw new Error("No frames available. Check camera connection.");
+      }
+    }
+
+    return this.latestFrame;
   }
 }
 export class TestCameraFrameProvider implements ICameraFrameProvider {

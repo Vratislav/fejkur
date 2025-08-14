@@ -3,8 +3,12 @@ import dotenv from "dotenv";
 import { GameEngine } from "./game/GameEngine";
 import { ConsoleNarrator } from "./game/inspo/NarratorConsole";
 import { StubLLM } from "./game/inspo/LLMStub";
-import { TestCameraFrameProvider } from "./game/CameraFrameProvider";
+import {
+  RealCameraFrameProvider,
+  TestCameraFrameProvider,
+} from "./game/CameraFrameProvider";
 import { RealHumanDetector } from "./game/HumanDetector";
+import { ICameraFrameProvider } from "./game/ICameraFrameProvider";
 
 // Load environment variables
 dotenv.config();
@@ -34,10 +38,17 @@ function getRtspUrlFromEnv() {
 
 async function main() {
   try {
+    let frameProvider: ICameraFrameProvider = new TestCameraFrameProvider();
+    if (process.env.CAMERA_PROVIDER !== "test") {
+      const realProvider = new RealCameraFrameProvider(getRtspUrlFromEnv());
+      realProvider.start();
+      frameProvider = realProvider;
+    }
+
     console.log("Starting game engine...");
     const llm = new StubLLM();
     const engine = new GameEngine({
-      frameProvider: new TestCameraFrameProvider(),
+      frameProvider: frameProvider,
       humanDetector: new RealHumanDetector(),
       llm: new StubLLM(),
       narrator: new ConsoleNarrator(process.env.VOICE_NARRATION === "true"),

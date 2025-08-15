@@ -182,8 +182,8 @@ export class GameEngine {
   }
 
   async doPlayingGameTick(frame: string, detection: HumanDetectionResult) {
-    this.players = await this.identifyPlayers(frame, this.players);
-    if (this.players.length > 0) {
+    //this.players = await this.identifyPlayers(frame, this.players);
+    if (detection.humansCount > 0) {
       const narration = await narrationFlow({
         framePath: frame,
         players: this.players,
@@ -198,9 +198,9 @@ export class GameEngine {
   }
 
   async doStartedGameTick(frame: string, detection: HumanDetectionResult) {
-    this.players = await this.identifyPlayers(frame, this.players);
+    //this.players = await this.identifyPlayers(frame, this.players);
 
-    if (this.players.length > 0) {
+    if (detection.humansCount > 0) {
       console.log("Players identified:");
       console.log(this.players);
       const narration = await narrationFlow({

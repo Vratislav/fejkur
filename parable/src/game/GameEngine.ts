@@ -121,6 +121,7 @@ export class GameEngine {
     this.amountOfTicksWithHuman = 0;
     this.currentTickDelayMs = 0;
     this.players = [];
+    this.narrationHistory = [];
     console.log("GAME RESET");
   }
 

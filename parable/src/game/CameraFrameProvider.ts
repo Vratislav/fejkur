@@ -75,7 +75,7 @@ export class RealCameraFrameProvider implements ICameraFrameProvider {
         timestamp: Date.now(),
       };
 
-      console.log(`Frame grabbed and stored: ${framePath}`);
+      //console.log(`Frame grabbed and stored: ${framePath}`);
     } catch (error) {
       console.error("Error grabbing frame:", error);
       // Keep the previous frame if available, don't crash the loop

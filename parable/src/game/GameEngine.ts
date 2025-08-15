@@ -106,9 +106,13 @@ export class GameEngine {
         }, 0);
       });
     } else {
+      const nextTickInMs =
+        Math.max(0, this.opts.tickMs - processTickDuration) +
+        this.currentTickDelayMs;
+      console.log(`Next tick in: ${nextTickInMs}ms`);
       this.intervalHandle = setTimeout(async () => {
         await this.doTick();
-      }, Math.max(0, this.opts.tickMs - processTickDuration) + this.currentTickDelayMs);
+      }, nextTickInMs);
     }
   }
 
@@ -179,14 +183,18 @@ export class GameEngine {
 
   async doPlayingGameTick(frame: string, detection: HumanDetectionResult) {
     this.players = await this.identifyPlayers(frame, this.players);
-    const narration = await narrationFlow({
-      framePath: frame,
-      players: this.players,
-      narrationHistory: this.narrationHistory,
-    });
-    this.narrationHistory.push(narration.narration);
-    this.narrator.narrate(narration.narration);
-    this.currentTickDelayMs = this.opts.delayTickAfterNarrationMs;
+    if (this.players.length > 0) {
+      const narration = await narrationFlow({
+        framePath: frame,
+        players: this.players,
+        narrationHistory: this.narrationHistory,
+      });
+      this.narrationHistory.push(narration.narration);
+      this.narrator.narrate(narration.narration);
+      this.currentTickDelayMs = this.opts.delayTickAfterNarrationMs;
+    } else {
+      this.currentTickDelayMs = 0;
+    }
   }
 
   async doStartedGameTick(frame: string, detection: HumanDetectionResult) {

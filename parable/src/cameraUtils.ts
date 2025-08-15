@@ -64,7 +64,7 @@ export async function grabFrame(rtspUrl: string): Promise<string> {
         ])
         .output(filePath)
         .on("end", () => {
-          console.log(`Frame successfully saved: ${filename}`);
+          console.log(`📸`);
           resolve(filePath);
         })
         .on("error", (err) => {

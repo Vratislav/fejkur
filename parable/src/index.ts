@@ -52,7 +52,7 @@ async function main() {
       humanDetector: new RealHumanDetector(),
       llm: new StubLLM(),
       narrator: new ConsoleNarrator(process.env.VOICE_NARRATION === "true"),
-      tickMs: 5_000,
+      tickMs: 1_000,
       delayTickAfterNarrationMs: 40_000,
       maxFrameStalenessMs: 10_000,
       maxTimeIntervalWithoutHumanMs: 60_000,
